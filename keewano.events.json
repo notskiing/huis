@@ -11,6 +11,10 @@
     { "eventName": "AppointmentConfirmed", "eventValueType": "string" },
     { "eventName": "RequestResolved", "eventValueType": "string" },
     { "eventName": "IntegrationFallbackActivated", "eventValueType": "string" },
-    { "eventName": "PropertyStatusSnapshot", "eventValueType": "string" }
+    { "eventName": "PropertyStatusSnapshot", "eventValueType": "string" },
+    { "eventName": "VendorRouted", "eventValueType": "string" },
+    { "eventName": "SafetyStepConfirmed", "eventValueType": "string" },
+    { "eventName": "AgentPlanGenerated", "eventValueType": "string" },
+    { "eventName": "TenantCallbackResponseLogged", "eventValueType": "string" }
   ]
 }

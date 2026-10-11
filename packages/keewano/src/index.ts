@@ -15,6 +15,10 @@ import {
   batchReportVendorCallCompleted,
   batchReportVendorOutreachStarted,
   batchReportPropertyStatusSnapshot,
+  batchReportVendorRouted,
+  batchReportSafetyStepConfirmed,
+  batchReportAgentPlanGenerated,
+  batchReportTenantCallbackResponseLogged,
   customEventSet,
 } from "./generated/keewano-events.generated.js";
 
@@ -77,6 +81,10 @@ function eventValue(event: AnalyticsDomainEvent): string {
     case "REQUEST_RESOLVED": return "resolved";
     case "INTEGRATION_FALLBACK_ACTIVATED": return token(payload.reason);
     case "PROPERTY_STATUS_SNAPSHOT": return `${token(payload.statusKey)}:${token(String(payload.openRequests ?? 0))}:${token(String(payload.urgentRequests ?? 0))}:${token(String(payload.approvalsDue ?? 0))}`;
+    case "VENDOR_ROUTED": return `${token(payload.category)}:${token(payload.vendorId)}`;
+    case "SAFETY_STEP_CONFIRMED": return `${token(payload.severity)}:${token(payload.nextStep)}`;
+    case "AGENT_PLAN_GENERATED": return `${token(payload.source)}:${token(payload.model, "rules")}`;
+    case "TENANT_CALLBACK_RESPONSE_LOGGED": return `${token(payload.channel)}:${token(payload.provider)}`;
     default: return token(event.eventName);
   }
 }
@@ -102,6 +110,10 @@ function emitEvent(event: AnalyticsDomainEvent, reporter: Parameters<typeof batc
     case "REQUEST_RESOLVED": return batchReportRequestResolved(reporter, value);
     case "INTEGRATION_FALLBACK_ACTIVATED": return batchReportIntegrationFallbackActivated(reporter, value);
     case "PROPERTY_STATUS_SNAPSHOT": return batchReportPropertyStatusSnapshot(reporter, value);
+    case "VENDOR_ROUTED": return batchReportVendorRouted(reporter, value);
+    case "SAFETY_STEP_CONFIRMED": return batchReportSafetyStepConfirmed(reporter, value);
+    case "AGENT_PLAN_GENERATED": return batchReportAgentPlanGenerated(reporter, value);
+    case "TENANT_CALLBACK_RESPONSE_LOGGED": return batchReportTenantCallbackResponseLogged(reporter, value);
     default: throw new Error(`Unsupported Keewano domain event: ${event.eventName}`);
   }
 }

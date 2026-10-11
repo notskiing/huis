@@ -16,6 +16,10 @@
  *   2509  RequestResolved  (String)
  *   2510  IntegrationFallbackActivated  (String)
  *   2511  PropertyStatusSnapshot  (String)
+ *   2512  VendorRouted  (String)
+ *   2513  SafetyStepConfirmed  (String)
+ *   2514  AgentPlanGenerated  (String)
+ *   2515  TenantCallbackResponseLogged  (String)
  */
 import type { CustomEventSet, UserId, UserReporter } from '@keewano/node-sdk';
 export declare function reportMaintenanceRequested(userId: UserId, value: string): void;
@@ -30,6 +34,10 @@ export declare function reportAppointmentConfirmed(userId: UserId, value: string
 export declare function reportRequestResolved(userId: UserId, value: string): void;
 export declare function reportIntegrationFallbackActivated(userId: UserId, value: string): void;
 export declare function reportPropertyStatusSnapshot(userId: UserId, value: string): void;
+export declare function reportVendorRouted(userId: UserId, value: string): void;
+export declare function reportSafetyStepConfirmed(userId: UserId, value: string): void;
+export declare function reportAgentPlanGenerated(userId: UserId, value: string): void;
+export declare function reportTenantCallbackResponseLogged(userId: UserId, value: string): void;
 export declare function batchReportMaintenanceRequested(reporter: UserReporter, value: string): void;
 export declare function batchReportUrgencyClassified(reporter: UserReporter, value: string): void;
 export declare function batchReportUrgentIssueRouted(reporter: UserReporter, value: string): void;
@@ -42,4 +50,8 @@ export declare function batchReportAppointmentConfirmed(reporter: UserReporter, 
 export declare function batchReportRequestResolved(reporter: UserReporter, value: string): void;
 export declare function batchReportIntegrationFallbackActivated(reporter: UserReporter, value: string): void;
 export declare function batchReportPropertyStatusSnapshot(reporter: UserReporter, value: string): void;
+export declare function batchReportVendorRouted(reporter: UserReporter, value: string): void;
+export declare function batchReportSafetyStepConfirmed(reporter: UserReporter, value: string): void;
+export declare function batchReportAgentPlanGenerated(reporter: UserReporter, value: string): void;
+export declare function batchReportTenantCallbackResponseLogged(reporter: UserReporter, value: string): void;
 export declare const customEventSet: CustomEventSet;

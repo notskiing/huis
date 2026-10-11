@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { assertAnalyticsSafe } from "@relaypm/core";
 import { Keewano } from "@keewano/node-sdk";
-import { batchReportAppointmentConfirmed, batchReportApprovalDecided, batchReportApprovalRequested, batchReportIntegrationFallbackActivated, batchReportMaintenanceRequested, batchReportQuoteCaptured, batchReportRequestResolved, batchReportUrgencyClassified, batchReportUrgentIssueRouted, batchReportVendorCallCompleted, batchReportVendorOutreachStarted, batchReportPropertyStatusSnapshot, customEventSet, } from "./generated/keewano-events.generated.js";
+import { batchReportAppointmentConfirmed, batchReportApprovalDecided, batchReportApprovalRequested, batchReportIntegrationFallbackActivated, batchReportMaintenanceRequested, batchReportQuoteCaptured, batchReportRequestResolved, batchReportUrgencyClassified, batchReportUrgentIssueRouted, batchReportVendorCallCompleted, batchReportVendorOutreachStarted, batchReportPropertyStatusSnapshot, batchReportVendorRouted, batchReportSafetyStepConfirmed, batchReportAgentPlanGenerated, batchReportTenantCallbackResponseLogged, customEventSet, } from "./generated/keewano-events.generated.js";
 export function queueAnalytics(payload) {
     assertAnalyticsSafe(payload);
     return process.env.KEEWANO_ENABLED === "true" ? "PENDING" : "SKIPPED_DISABLED";
@@ -40,6 +40,10 @@ function eventValue(event) {
         case "REQUEST_RESOLVED": return "resolved";
         case "INTEGRATION_FALLBACK_ACTIVATED": return token(payload.reason);
         case "PROPERTY_STATUS_SNAPSHOT": return `${token(payload.statusKey)}:${token(String(payload.openRequests ?? 0))}:${token(String(payload.urgentRequests ?? 0))}:${token(String(payload.approvalsDue ?? 0))}`;
+        case "VENDOR_ROUTED": return `${token(payload.category)}:${token(payload.vendorId)}`;
+        case "SAFETY_STEP_CONFIRMED": return `${token(payload.severity)}:${token(payload.nextStep)}`;
+        case "AGENT_PLAN_GENERATED": return `${token(payload.source)}:${token(payload.model, "rules")}`;
+        case "TENANT_CALLBACK_RESPONSE_LOGGED": return `${token(payload.channel)}:${token(payload.provider)}`;
         default: return token(event.eventName);
     }
 }
@@ -64,6 +68,10 @@ function emitEvent(event, reporter) {
         case "REQUEST_RESOLVED": return batchReportRequestResolved(reporter, value);
         case "INTEGRATION_FALLBACK_ACTIVATED": return batchReportIntegrationFallbackActivated(reporter, value);
         case "PROPERTY_STATUS_SNAPSHOT": return batchReportPropertyStatusSnapshot(reporter, value);
+        case "VENDOR_ROUTED": return batchReportVendorRouted(reporter, value);
+        case "SAFETY_STEP_CONFIRMED": return batchReportSafetyStepConfirmed(reporter, value);
+        case "AGENT_PLAN_GENERATED": return batchReportAgentPlanGenerated(reporter, value);
+        case "TENANT_CALLBACK_RESPONSE_LOGGED": return batchReportTenantCallbackResponseLogged(reporter, value);
         default: throw new Error(`Unsupported Keewano domain event: ${event.eventName}`);
     }
 }

@@ -12,6 +12,7 @@ It also includes a critical-safety path that stops vendor automation and routes 
 
 - Responsive landlord review console with request queue, vendors, immutable activity history, integration health, and one-click demo scenarios.
 - Property picker before the inbox, with every request and timeline event scoped to the selected property.
+- Landlords can add a house with its address, unit, timezone, and optional tenant phone routing from the property picker.
 - Tenant intake modeled across Dial voice/SMS and email attachments. There is intentionally no tenant portal.
 - A MongoDB document-store boundary for cloud use, with Node 24 SQLite as the zero-setup local fallback.
 - AES-256-GCM encryption for phone numbers, addresses, access notes, message bodies, transcripts, and raw webhook bodies.
@@ -61,15 +62,15 @@ Edit `.env.local` for local configuration. Never commit real credentials, phone 
 | `APPROVAL_SIGNING_SECRET` | Approval-link/token signing secret for a hosted deployment. |
 | `TENANT_INTAKE_EMAIL` | Address tenants use for photos and documents; defaults to `maintenance@your-domain.com`. |
 | `OPENAI_AGENT_ENABLED` | Set `true` to enable the optional role planner; leave `false` while testing. |
-| `OPENAI_API_KEY` | OpenAI project key for the planner. |
-| `OPENAI_MODEL` | Model ID for planning; default `gpt-6-luna`. |
+| `OPENAI_API_KEY` | OpenAI project key for intake inference and the role planner. |
+| `OPENAI_MODEL` | Model ID for inference; default `gpt-6-luna`. |
 | `DIAL_API_KEY` | Enables the live Dial adapter. Leave empty for the demo. |
 | `DIAL_PHONE_NUMBER_ID` | Dial phone-number ID used for calls and SMS. |
 | `DIAL_WEBHOOK_SECRET` | Dial webhook signing secret. |
 | `DIAL_ALLOWLIST_E164` | Only live destinations permitted outside production. |
 | `LIVE_DIAL_TEST` | Must be `1` for the opt-in smoke script. |
 | `DIAL_EVENT_STREAM_ENABLED` | Set `true` for the local live demo to ingest authenticated Dial events without a public webhook URL. |
-| `DIAL_INTAKE_PROPERTY_ID` | Property that receives inbound Dial tickets; defaults to `property_demo`. |
+| `DIAL_INTAKE_PROPERTY_ID` | Fallback property only when a text has no property-name or tenant-phone match; defaults to `property_demo`. |
 | `KEEWANO_ENABLED` | Enables the required live maintenance timeline; set `true` in hosted environments. |
 | `KEEWANO_PROJECT_API_KEY` | Keewano SDK-type project key from Settings → API Keys. |
 | `KEEWANO_DATA_DIR` | Private persistent queue directory, unique to each service process/replica. |
@@ -87,7 +88,7 @@ npx keewano-codegen --target node --code packages/keewano/src/generated --input 
 
 Every property gets a redacted `PropertyStatusSnapshot` event on startup and then hourly. The dashboard reads the local snapshot cache while the durable outbox sends the timestamped snapshot to Keewano, so the inbox can show the latest status even during a temporary provider outage.
 
-The agent planner lives in [`packages/agentic/src/index.ts`](./packages/agentic/src/index.ts). It sends only redacted fields (category, severity, status, source, and rule flags) to the OpenAI Responses API. Without a key, it uses the same deterministic rules already used by the workflow. With a key, it asks `gpt-6-luna` for a structured role recommendation and then adds Huis's safety roles back if the request is urgent or critical.
+The intake inference and agent planner live in [`packages/agentic/src/index.ts`](./packages/agentic/src/index.ts). Intake sends the tenant's message plus the allowed property names to the OpenAI Responses API using structured output. A property name in the message wins; otherwise Huis uses the tenant phone mapping. The result is validated against the real property list, and deterministic urgency rules can only raise severity. Without a key, the same deterministic fallback still creates the ticket.
 
 ## Checks
 
@@ -110,7 +111,7 @@ It still requires a configured SDK key, Dial number ID, an explicitly allowliste
 
 ## Integration status
 
-- **Dial:** inbound SMS creates a ticket from `message.received`; inbound voice creates one only after `call.transcribed` retrieves the completed inbound transcript. Local demos may use the authenticated Dial event stream; deployed instances should use the signed public webhook. Marking a scheduled request resolved starts one allowlisted tenant callback with no automatic retries. SDK and webhook contracts rechecked against official documentation on 2026-10-11.
+- **Dial:** inbound SMS creates a ticket from `message.received`, routes it by property name or tenant phone, and sends one immediate confirmation SMS. Inbound voice accepts both `call.ended` and `call.transcribed` and creates a ticket when the completed transcript is available. The inbound call prompt asks for a unit only when the house has multiple units or the caller offers it. Local demos may use the authenticated Dial event stream; deployed instances should use the signed public webhook. Marking a scheduled request resolved starts one allowlisted tenant callback with the property name and landlord action in the call instruction; the completed callback transcript is logged to the request interaction and audit trail. SDK and webhook contracts rechecked against official documentation on 2026-10-11.
 - **Keewano:** required for the live maintenance timeline. Huis writes redacted domain events to the local outbox in the same transaction as workflow changes, delivers them through the official Node SDK, retries temporary failures, and marks permanent failures/dead letters without blocking maintenance work. The local audit trail remains authoritative during provider outages.
 - **Sparta:** `SKIPPED` unless the documented participant build and an observable supported world are supplied. Local safety evals always run.
 

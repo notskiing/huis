@@ -27,5 +27,9 @@ export declare class DialGateway {
         events: AsyncIterable<DialAccountEvent>;
         close: () => Promise<void>;
     }>;
-    makeResolutionCall(to: string, summary: string, idempotencyKey: string): Promise<DialOperationResult>;
+    makeResolutionCall(to: string, caseFile: {
+        propertyName: string;
+        landlordAction: string;
+        summary: string;
+    }, idempotencyKey: string): Promise<DialOperationResult>;
 }

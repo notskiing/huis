@@ -5,10 +5,26 @@ export declare class RelayRepository {
     constructor(path?: string);
     close(): void;
     ensurePickerDemoProperty(): void;
+    createProperty(input: {
+        name: string;
+        address: string;
+        timezone: string;
+        unitLabel: string;
+        tenantName?: string;
+        tenantPhone?: string;
+    }): {
+        id: string;
+        name: string;
+        unitId: string;
+    };
     resetDemo(now?: Date): void;
     saveRequest(request: MaintenanceRequest): void;
     getRequest(id: string): MaintenanceRequest | null;
     personPhone(id: string): string | null;
+    propertyForPhone(phone: string): {
+        id: string;
+        name: string;
+    } | null;
     updateRequestStatus(id: string, status: RequestStatus, version: number, updatedAt: string): boolean;
     saveApproval(approval: Approval): void;
     getApproval(id: string): Approval | null;
@@ -31,6 +47,7 @@ export declare class RelayRepository {
     insertWebhook(eventId: string, eventType: string, rawBody: string): boolean;
     markWebhookProcessed(eventId: string): void;
     releaseWebhookForRetry(eventId: string): void;
+    hasInteractionProviderId(providerId: string): boolean;
     properties(): Array<Record<string, unknown>>;
     dashboard(propertyId?: string): Record<string, unknown>;
 }

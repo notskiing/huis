@@ -31,7 +31,7 @@ export function transitionRequest(
   if (!allowed[request.status].includes(next)) {
     throw new DomainRuleError(`Cannot transition ${request.status} to ${next}.`, "INVALID_TRANSITION");
   }
-  if ((request.severity === "CRITICAL" || request.severity === "URGENT") && next === "SOURCING") {
+  if ((request.severity === "CRITICAL" || request.severity === "URGENT") && next === "SOURCING" && !request.humanOverride) {
     throw new DomainRuleError("Urgent requests require human review and cannot start vendor automation.", "URGENT_AUTOMATION_BLOCKED");
   }
   return { ...request, status: next, version: request.version + 1, updatedAt: now.toISOString() };

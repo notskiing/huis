@@ -14,7 +14,7 @@ describe("Keewano timeline boundary", () => {
     const first = stableKeewanoUserId("req_demo_leak");
     expect(first).toBe(stableKeewanoUserId("req_demo_leak"));
     expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    expect(customEventSet.eventCount).toBe(12);
+    expect(customEventSet.eventCount).toBe(16);
     expect(customEventSet.events?.[0]?.id).toBe(2500);
   });
 

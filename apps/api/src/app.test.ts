@@ -27,6 +27,18 @@ describe("Huis API workflow",()=>{
     expect(critical.status).toBe("HUMAN_REVIEW"); expect(critical.quotes).toHaveLength(0); expect(critical.approvals).toHaveLength(0);
     await app.close(); repo.close();
   });
+  it("uses the safety acknowledgement and agent plan to unlock the next quote step",async()=>{
+    const repo=new RelayRepository(); repo.resetDemo(); const {app}=createApp(repo);
+    const response=await app.inject({method:"POST",url:"/api/demo/intake",payload:{scenario:"critical"}});
+    const critical=(response.json() as any).requests.find((r:any)=>r.severity==="CRITICAL");
+    const next=await app.inject({method:"POST",url:`/api/requests/${critical.id}/acknowledge-safety`,payload:{} });
+    expect(next.statusCode).toBe(200);
+    const routed=(repo.getRequest(critical.id));
+    expect(routed?.status).toBe("AWAITING_OUTREACH_APPROVAL");
+    expect(routed?.humanOverride).toBe("CRITICAL");
+    expect((repo.dashboard() as any).requests.find((r:any)=>r.id===critical.id)?.approvals).toHaveLength(1);
+    await app.close(); repo.close();
+  });
   it("creates one maintenance request from a verified inbound Dial text",async()=>{
     process.env.DIAL_WEBHOOK_SECRET="whsec_test";
     const repo=new RelayRepository(); repo.resetDemo(); const {app}=createApp(repo);
@@ -34,10 +46,22 @@ describe("Huis API workflow",()=>{
     const signature=`t=${timestamp},v1=${createHmac("sha256",process.env.DIAL_WEBHOOK_SECRET).update(`${timestamp}.${raw}`).digest("hex")}`;
     const response=await app.inject({method:"POST",url:"/webhooks/dial",headers:{"content-type":"application/json","x-dial-signature":signature,"x-dial-event-id":"evt_dial_sms_1","x-dial-event-type":"message.received"},payload:raw});
     expect(response.statusCode, response.body).toBe(202);
-    const ticket=(repo.dashboard() as any).requests.find((request:any)=>request.interactions.some((interaction:any)=>interaction.provider==="DIAL"));
+    const ticket=(repo.dashboard("property_cedar") as any).requests.find((request:any)=>request.interactions.some((interaction:any)=>interaction.provider==="DIAL"));
     expect(ticket).toMatchObject({source:"SMS",category:"Plumbing",severity:"URGENT",status:"HUMAN_REVIEW"});
     const duplicate=await app.inject({method:"POST",url:"/webhooks/dial",headers:{"content-type":"application/json","x-dial-signature":signature,"x-dial-event-id":"evt_dial_sms_1","x-dial-event-type":"message.received"},payload:raw});
     expect(duplicate.json()).toMatchObject({duplicate:true});
+    await app.close(); repo.close();
+  });
+  it("routes heating requests to the electrical vendor",async()=>{
+    process.env.DIAL_WEBHOOK_SECRET="whsec_test";
+    const repo=new RelayRepository(); repo.resetDemo(); const {app}=createApp(repo);
+    const timestamp=Math.floor(Date.now()/1000); const raw=JSON.stringify({id:"evt_dial_heating_1",type:"message.received",createdAt:new Date().toISOString(),data:{messageId:"msg_dial_heating_1",from:"+17074956852",to:"+17070000000",channel:"sms",body:"The heating is not working and the thermostat is blank.",media:[],source:"external"}});
+    const signature=`t=${timestamp},v1=${createHmac("sha256",process.env.DIAL_WEBHOOK_SECRET).update(`${timestamp}.${raw}`).digest("hex")}`;
+    const response=await app.inject({method:"POST",url:"/webhooks/dial",headers:{"content-type":"application/json","x-dial-signature":signature,"x-dial-event-id":"evt_dial_heating_1","x-dial-event-type":"message.received"},payload:raw});
+    expect(response.statusCode, response.body).toBe(202);
+    const ticket=(repo.dashboard("property_cedar") as any).requests.find((request:any)=>request.interactions.some((interaction:any)=>interaction.provider==="DIAL"));
+    expect(ticket).toMatchObject({category:"Electrical",severity:"ROUTINE"});
+    expect(ticket.approvals[0].scope.vendorIds).toEqual(["vendor_electrician"]);
     await app.close(); repo.close();
   });
 });

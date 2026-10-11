@@ -1,6 +1,12 @@
+function normalizeE164(value) {
+    const compact = value.trim().replace(/[\s().-]/g, "");
+    if (compact.startsWith("00"))
+        return `+${compact.slice(2)}`;
+    return compact.startsWith("+") ? compact : `+${compact}`;
+}
 function allowlisted(to) {
-    const entries = (process.env.DIAL_ALLOWLIST_E164 ?? "").split(",").map((value) => value.trim()).filter(Boolean);
-    return process.env.NODE_ENV === "production" || entries.includes(to);
+    const entries = (process.env.DIAL_ALLOWLIST_E164 ?? "").split(",").map(normalizeE164).filter(Boolean);
+    return process.env.NODE_ENV === "production" || entries.includes(normalizeE164(to));
 }
 export class DialGateway {
     live;
@@ -66,7 +72,7 @@ export class DialGateway {
         const connection = await client.newEventsConnection();
         return { events: connection, close: () => connection.close() };
     }
-    async makeResolutionCall(to, summary, idempotencyKey) {
+    async makeResolutionCall(to, caseFile, idempotencyKey) {
         const client = await this.client();
         if (!client)
             return { providerId: `sim_call_${crypto.randomUUID()}`, status: "simulated" };
@@ -77,7 +83,7 @@ export class DialGateway {
         const call = await client.makeCall({
             to,
             fromNumberId: process.env.DIAL_PHONE_NUMBER_ID,
-            outboundInstruction: `Identify yourself as Huis, the maintenance coordinator. Tell the tenant that their request has been marked resolved: ${summary}. Ask whether the issue is actually resolved. Do not make safety claims, discuss money, or promise more work. If they say the issue remains, tell them you will reopen the request for landlord review.`,
+            outboundInstruction: `Identify yourself as an agent speaking on behalf of Huis, the maintenance coordinator, regarding their property ${caseFile.propertyName}. Read their case file and tell them what the landlord has done for their situation: ${caseFile.landlordAction}. The case file concerns: ${caseFile.summary}. Ask, “Is there anything else I can help you with today?” Do not make safety claims, discuss money, or promise more work.`,
             language: "en-US",
             idempotencyKey,
         });

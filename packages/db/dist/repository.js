@@ -37,7 +37,34 @@ export class RelayRepository {
     close() { this.db.close(); }
     ensurePickerDemoProperty() {
         this.db.prepare("INSERT OR IGNORE INTO properties VALUES (?, ?, ?, ?, ?, ?)").run("property_cedar", "Cedar Court", "America/Los_Angeles", encrypt("42 Cedar Court, Oakland, CA"), "person_landlord", "policy_demo");
-        this.db.prepare("INSERT OR IGNORE INTO units VALUES (?, ?, ?, ?, ?)").run("unit_1a", "property_cedar", "1A", JSON.stringify([]), encrypt("No tenant contact has been added yet"));
+        this.db.prepare("INSERT OR IGNORE INTO people VALUES (?, ?, ?, ?, ?, ?)").run("person_tenant_cedar", "TENANT", "Cedar Court tenant", encrypt("+17074956852"), JSON.stringify({ sms: true, voice: true }), "en-US");
+        this.db.prepare("INSERT OR IGNORE INTO units VALUES (?, ?, ?, ?, ?)").run("unit_1a", "property_cedar", "1A", JSON.stringify(["person_tenant_cedar"]), encrypt("Coordinate all access with tenant"));
+        this.db.prepare("UPDATE units SET tenant_person_ids_json=? WHERE id=?").run(JSON.stringify(["person_tenant_cedar"]), "unit_1a");
+    }
+    createProperty(input) {
+        const name = input.name.trim();
+        const address = input.address.trim();
+        const timezone = input.timezone.trim() || "America/Los_Angeles";
+        const unitLabel = input.unitLabel.trim() || "Main unit";
+        if (!name || !address)
+            throw new Error("Property name and address are required");
+        const propertyId = `property_${randomUUID()}`;
+        const unitId = `unit_${randomUUID()}`;
+        const tenantPhone = input.tenantPhone?.trim() || "";
+        const tenantPersonId = tenantPhone ? `person_${randomUUID()}` : null;
+        this.db.exec("BEGIN IMMEDIATE");
+        try {
+            this.db.prepare("INSERT INTO properties VALUES (?, ?, ?, ?, ?, ?)").run(propertyId, name, timezone, encrypt(address), "person_landlord", "policy_demo");
+            if (tenantPersonId)
+                this.db.prepare("INSERT INTO people VALUES (?, ?, ?, ?, ?, ?)").run(tenantPersonId, "TENANT", input.tenantName?.trim() || "Tenant", encrypt(tenantPhone), JSON.stringify({ sms: true, voice: true }), "en-US");
+            this.db.prepare("INSERT INTO units VALUES (?, ?, ?, ?, ?)").run(unitId, propertyId, unitLabel, JSON.stringify(tenantPersonId ? [tenantPersonId] : []), encrypt("Coordinate all access with tenant"));
+            this.db.exec("COMMIT");
+        }
+        catch (error) {
+            this.db.exec("ROLLBACK");
+            throw error;
+        }
+        return { id: propertyId, name, unitId };
     }
     resetDemo(now = new Date()) {
         this.db.exec("BEGIN IMMEDIATE");
@@ -102,6 +129,16 @@ export class RelayRepository {
         const row = this.db.prepare("SELECT phone_e164_encrypted FROM people WHERE id=?").get(id);
         return row ? decrypt(row.phone_e164_encrypted) : null;
     }
+    propertyForPhone(phone) {
+        const rows = this.db.prepare("SELECT p.id, p.name, u.tenant_person_ids_json FROM properties p JOIN units u ON u.property_id=p.id").all();
+        for (const row of rows) {
+            const people = JSON.parse(row.tenant_person_ids_json);
+            for (const personId of people)
+                if (this.personPhone(personId) === phone)
+                    return { id: String(row.id), name: String(row.name) };
+        }
+        return null;
+    }
     updateRequestStatus(id, status, version, updatedAt) {
         return this.db.prepare("UPDATE maintenance_requests SET status=?, version=?, updated_at=? WHERE id=? AND version=?")
             .run(status, version + 1, updatedAt, id, version).changes === 1;
@@ -137,7 +174,7 @@ export class RelayRepository {
         const urgentRequests = Number(this.db.prepare("SELECT COUNT(*) AS n FROM maintenance_requests WHERE property_id=? AND severity IN ('URGENT','CRITICAL') AND status NOT IN ('RESOLVED','CANCELLED')").get(propertyId).n);
         const approvalsDue = Number(this.db.prepare("SELECT COUNT(*) AS n FROM approvals a JOIN maintenance_requests r ON r.id=a.maintenance_request_id WHERE r.property_id=? AND a.status='PENDING'").get(propertyId).n);
         const statusKey = urgentRequests > 0 ? "urgent" : approvalsDue > 0 ? "approval_due" : openRequests > 0 ? "in_progress" : "clear";
-        const statusLabel = urgentRequests > 0 ? "Human response needed" : approvalsDue > 0 ? "Landlord approval needed" : openRequests > 0 ? "Work in progress" : "All clear";
+        const statusLabel = urgentRequests > 0 ? "Urgent action needed" : approvalsDue > 0 ? "Landlord approval needed" : openRequests > 0 ? "Work in progress" : "All clear";
         const payload = { statusKey, statusLabel, openRequests, urgentRequests, approvalsDue };
         assertAnalyticsSafe(payload);
         this.db.exec("BEGIN IMMEDIATE");
@@ -194,6 +231,9 @@ export class RelayRepository {
     }
     releaseWebhookForRetry(eventId) {
         this.db.prepare("DELETE FROM webhook_inbox WHERE provider='DIAL' AND provider_event_id=? AND processed_at IS NULL").run(eventId);
+    }
+    hasInteractionProviderId(providerId) {
+        return Boolean(this.db.prepare("SELECT 1 FROM interactions WHERE provider_external_id=? LIMIT 1").get(providerId));
     }
     properties() {
         const rows = this.db.prepare(`SELECT p.id, p.name, p.timezone,
