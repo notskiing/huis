@@ -8,7 +8,7 @@ const criticalRules: Array<[RegExp, string]> = [
 ];
 
 const urgentRules: Array<[RegExp, string]> = [
-  [/\b(flooding|uncontrolled water|burst pipe|water (?:is )?pouring)\b/i, "ACTIVE_WATER"],
+  [/\b(flooding|uncontrolled water|burst pipe|pipe burst|water (?:is )?pouring)\b/i, "ACTIVE_WATER"],
   [/\b(sewage|sewer backup|raw sewage)\b/i, "SEWAGE"],
   [/\b(no heat|heater (?:is )?out)\b/i, "NO_HEAT"],
   [/\b(door (?:will not|won't|cannot) (?:lock|secure))\b/i, "UNSECURED_ENTRY"],

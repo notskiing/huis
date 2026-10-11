@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { assertAnalyticsSafe, type Approval, type AuditEvent, type MaintenanceRequest, type RequestStatus, type VendorQuote } from "@relaypm/core";
-import { encrypt } from "./crypto.js";
+import { decrypt, encrypt } from "./crypto.js";
 import { migration } from "./schema.js";
 
 type Row = Record<string, any>;
@@ -110,6 +110,11 @@ export class RelayRepository {
     return row ? parseRequest(row) : null;
   }
 
+  personPhone(id: string): string | null {
+    const row = this.db.prepare("SELECT phone_e164_encrypted FROM people WHERE id=?").get(id) as Row | undefined;
+    return row ? decrypt(row.phone_e164_encrypted) : null;
+  }
+
   updateRequestStatus(id: string, status: RequestStatus, version: number, updatedAt: string): boolean {
     return this.db.prepare("UPDATE maintenance_requests SET status=?, version=?, updated_at=? WHERE id=? AND version=?")
       .run(status, version + 1, updatedAt, id, version).changes === 1;
@@ -207,6 +212,15 @@ export class RelayRepository {
 
   insertWebhook(eventId: string, eventType: string, rawBody: string): boolean {
     return this.db.prepare("INSERT OR IGNORE INTO webhook_inbox VALUES (?, ?, ?, ?, ?, ?)").run("DIAL", eventId, eventType, encrypt(rawBody), new Date().toISOString(), null).changes === 1;
+  }
+
+  markWebhookProcessed(eventId: string): void {
+    this.db.prepare("UPDATE webhook_inbox SET processed_at=? WHERE provider='DIAL' AND provider_event_id=?")
+      .run(new Date().toISOString(), eventId);
+  }
+
+  releaseWebhookForRetry(eventId: string): void {
+    this.db.prepare("DELETE FROM webhook_inbox WHERE provider='DIAL' AND provider_event_id=? AND processed_at IS NULL").run(eventId);
   }
 
   properties(): Array<Record<string, unknown>> {

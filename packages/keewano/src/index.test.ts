@@ -24,6 +24,7 @@ describe("Keewano timeline boundary", () => {
       { id: "1", aggregateId: "req_demo_leak", eventName: "maintenance_requested", payload: { channel: "SMS", category: "Plumbing" }, createdAt: new Date().toISOString(), attempts: 0 },
       { id: "2", aggregateId: "req_demo_leak", eventName: "urgency_classified", payload: { severity: "ROUTINE" }, createdAt: new Date().toISOString(), attempts: 0 },
       { id: "3", aggregateId: "req_demo_leak", eventName: "approval_requested", payload: { purpose: "VENDOR_OUTREACH" }, createdAt: new Date().toISOString(), attempts: 0 },
+      { id: "4", aggregateId: "req_demo_leak", eventName: "approval_decided", payload: { outcome: "approved" }, createdAt: new Date().toISOString(), attempts: 0 },
     ];
     const store = fakeStore(events);
     const delivered: string[] = [];
@@ -33,7 +34,7 @@ describe("Keewano timeline boundary", () => {
     };
     const outbox = new KeewanoOutbox(store, fakeTimeline as never);
     await outbox.drainOnce();
-    expect(delivered).toHaveLength(3);
+    expect(delivered).toHaveLength(4);
     expect(store.pendingAnalyticsEvents()).toHaveLength(0);
   });
 

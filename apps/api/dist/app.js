@@ -1,11 +1,11 @@
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { approve, classifyUrgency, consumeApproval, createApproval, DomainRuleError, transitionRequest } from "@relaypm/core";
 import { encrypt, MongoDocumentStore, mongoConfigFromEnv, RelayRepository } from "@relaypm/db";
-import { verifyDialWebhook } from "@relaypm/dial";
+import { DialGateway, verifyDialWebhook } from "@relaypm/dial";
 import { AgentPlanner } from "@relaypm/agentic";
 import { KeewanoOutbox, KeewanoTimeline } from "@relaypm/keewano";
 function databasePath() {
@@ -22,6 +22,7 @@ export function createApp(repo = new RelayRepository(databasePath())) {
     const keewanoTimeline = new KeewanoTimeline();
     const keewanoOutbox = new KeewanoOutbox(repo, keewanoTimeline);
     const agentPlanner = new AgentPlanner();
+    const dialGateway = new DialGateway();
     const mongoConfig = mongoConfigFromEnv();
     const mongoStore = mongoConfig ? new MongoDocumentStore(mongoConfig) : null;
     let mongoStatus = mongoStore ? "connecting" : "disabled";
@@ -56,6 +57,90 @@ export function createApp(repo = new RelayRepository(databasePath())) {
     const statusTimer = setInterval(() => { void publishPropertyStatuses(); }, statusIntervalMs);
     statusTimer.unref();
     app.addHook("onClose", async () => { clearInterval(statusTimer); });
+    const intakeCategory = (text) => /pipe|plumb|leak|drain|water|sink|toilet/i.test(text) ? "Plumbing" : /electric|power|outlet|light|breaker/i.test(text) ? "Electrical" : "Maintenance";
+    const createInboundTicket = async (input) => {
+        const propertyId = process.env.DIAL_INTAKE_PROPERTY_ID ?? "property_demo";
+        const unit = repo.db.prepare("SELECT id FROM units WHERE property_id=? ORDER BY label LIMIT 1").get(propertyId);
+        if (!unit)
+            throw new DomainRuleError("Configured Dial intake property was not found.", "PROPERTY_NOT_FOUND");
+        const text = input.text.trim().slice(0, 8_000);
+        if (!text)
+            return;
+        const now = new Date(input.occurredAt).toISOString();
+        const urgency = classifyUrgency(text);
+        const reporterPersonId = `person_dial_${createHash("sha256").update(input.from).digest("hex").slice(0, 16)}`;
+        const item = {
+            id: `req_${randomUUID()}`, propertyId, unitId: unit.id, reporterPersonId, source: input.source,
+            category: intakeCategory(text), severity: urgency.severity, summary: text.slice(0, 500),
+            status: urgency.severity === "ROUTINE" ? "AWAITING_OUTREACH_APPROVAL" : "HUMAN_REVIEW",
+            ruleFlags: urgency.flags, humanOverride: null, createdAt: now, updatedAt: now, version: 1,
+        };
+        repo.db.exec("BEGIN IMMEDIATE");
+        try {
+            repo.db.prepare("INSERT OR IGNORE INTO people VALUES (?, ?, ?, ?, ?, ?)").run(reporterPersonId, "TENANT", "Dial tenant", encrypt(input.from), JSON.stringify({ sms: true, voice: true }), "en-US");
+            repo.saveRequest(item);
+            repo.db.prepare("INSERT INTO interactions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(`int_${randomUUID()}`, item.id, input.source, "INBOUND", reporterPersonId, "DIAL", input.providerId, input.eventId, encrypt(text), input.source === "SMS" ? "Tenant text received through Dial." : "Tenant voice intake transcribed through Dial.", now, new Date().toISOString());
+            repo.addAudit(item.id, "REQUEST_CREATED", "TENANT", reporterPersonId, { channel: input.source, severity: urgency.severity }, now);
+            repo.addAudit(item.id, "URGENCY_CLASSIFIED", "SYSTEM", null, { severity: urgency.severity, ruleFlags: urgency.flags }, now);
+            if (urgency.severity === "ROUTINE") {
+                repo.saveApproval(createApproval({ id: `approval_${randomUUID()}`, request: item, requestedFromPersonId: "person_landlord", kind: "VENDOR_OUTREACH", scope: { vendorIds: ["vendor_plumber"], purpose: "QUOTE_ONLY" }, expiresAt: new Date(Date.parse(now) + 4 * 60 * 60_000) }));
+                repo.addDomainEvent(item.id, "approval_requested", { purpose: "VENDOR_OUTREACH" }, now);
+            }
+            else {
+                repo.addAudit(item.id, "HUMAN_ESCALATION_REQUIRED", "SYSTEM", null, { automationStopped: true, guidance: "Landlord review required before any vendor automation." }, now);
+                repo.addDomainEvent(item.id, "urgent_issue_routed", { severity: urgency.severity }, now);
+            }
+            repo.addDomainEvent(item.id, "maintenance_requested", { severity: urgency.severity, category: item.category, channel: input.source }, now);
+            repo.addDomainEvent(item.id, "urgency_classified", { severity: urgency.severity }, now);
+            repo.db.exec("COMMIT");
+        }
+        catch (error) {
+            repo.db.exec("ROLLBACK");
+            throw error;
+        }
+        void publishPropertyStatuses();
+    };
+    const processDialEvent = async (eventId, eventType, raw) => {
+        const inserted = repo.insertWebhook(eventId, eventType, raw);
+        if (!inserted)
+            return true;
+        try {
+            const envelope = JSON.parse(raw);
+            const data = envelope.data ?? {};
+            const occurredAt = typeof envelope.createdAt === "string" ? envelope.createdAt : new Date().toISOString();
+            if (eventType === "message.received" && typeof data.from === "string" && typeof data.body === "string" && typeof data.messageId === "string") {
+                await createInboundTicket({ source: "SMS", from: data.from, text: data.body, providerId: data.messageId, eventId, occurredAt });
+            }
+            if (eventType === "call.transcribed" && typeof data.callId === "string") {
+                const call = await dialGateway.getCall(data.callId);
+                if (call.direction === "inbound" && call.transcript)
+                    await createInboundTicket({ source: "VOICE", from: call.from, text: call.transcript, providerId: call.id, eventId, occurredAt: call.createdAt || occurredAt });
+            }
+            repo.markWebhookProcessed(eventId);
+            return false;
+        }
+        catch (error) {
+            repo.releaseWebhookForRetry(eventId);
+            throw error;
+        }
+    };
+    let closeDialEventStream = null;
+    if (process.env.DIAL_EVENT_STREAM_ENABLED === "true" && process.env.DIAL_API_KEY) {
+        void dialGateway.openEventStream().then(({ events, close }) => {
+            closeDialEventStream = close;
+            console.info("[huis] Dial inbound event stream connected");
+            void (async () => {
+                try {
+                    for await (const event of events)
+                        await processDialEvent(event.id, event.type, JSON.stringify(event));
+                }
+                catch (error) {
+                    console.warn(`[huis] Dial event stream stopped: ${error instanceof Error ? error.message : "unknown error"}`);
+                }
+            })();
+        }).catch((error) => console.warn(`[huis] Dial event stream unavailable: ${error instanceof Error ? error.message : "unknown error"}`));
+    }
+    app.addHook("onClose", async () => { await closeDialEventStream?.(); });
     app.get("/health", async () => ({ ok: true, service: "huis-api", storage: mongoStatus === "connected" ? "mongodb-configured" : "local-demo", integrations: { keewano: keewanoTimeline.status, mongodb: mongoStatus } }));
     app.get("/api/properties", async () => ({ properties: repo.properties() }));
     app.get("/api/dashboard", async (request, reply) => {
@@ -231,6 +316,38 @@ export function createApp(repo = new RelayRepository(databasePath())) {
         await publishPropertyStatuses();
         return repo.dashboard(item.propertyId);
     });
+    app.post("/api/requests/:id/resolve-and-callback", async (request) => {
+        const item = repo.getRequest(request.params.id);
+        if (!item)
+            throw new DomainRuleError("Request not found.", "NOT_FOUND");
+        const next = transitionRequest(item, "RESOLVED", item.version);
+        const tenantPhone = repo.personPhone(item.reporterPersonId);
+        if (!tenantPhone)
+            throw new DomainRuleError("Tenant phone number is unavailable for the callback.", "TENANT_PHONE_UNAVAILABLE");
+        const operationId = `op_${randomUUID()}`;
+        repo.db.prepare("INSERT INTO external_operations VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(operationId, item.id, "TENANT_RESOLUTION_CALLBACK", "DIAL", null, JSON.stringify({ purpose: "RESOLUTION_CONFIRMATION" }), "PENDING", new Date().toISOString());
+        try {
+            const result = await dialGateway.makeResolutionCall(tenantPhone, item.summary, operationId);
+            repo.db.exec("BEGIN IMMEDIATE");
+            try {
+                repo.saveRequest(next);
+                repo.db.prepare("UPDATE external_operations SET provider_external_id=?, status=? WHERE id=?").run(result.providerId, result.status === "accepted" ? "SUCCEEDED" : "SUCCEEDED_SIMULATED", operationId);
+                repo.addAudit(item.id, "TENANT_CALLBACK_STARTED", "SYSTEM", null, { provider: "DIAL", status: result.status });
+                repo.addDomainEvent(item.id, "request_resolved", { channel: "VOICE" });
+                repo.db.exec("COMMIT");
+            }
+            catch (error) {
+                repo.db.exec("ROLLBACK");
+                throw error;
+            }
+        }
+        catch (error) {
+            repo.db.prepare("UPDATE external_operations SET status=? WHERE id=?").run("FAILED_REQUIRES_REVIEW", operationId);
+            throw error;
+        }
+        await publishPropertyStatuses();
+        return repo.dashboard(item.propertyId);
+    });
     app.post("/webhooks/dial", { config: { rawBody: true } }, async (request, reply) => {
         const signature = String(request.headers["x-dial-signature"] ?? "");
         const eventId = String(request.headers["x-dial-event-id"] ?? "");
@@ -241,8 +358,8 @@ export function createApp(repo = new RelayRepository(databasePath())) {
             return reply.code(401).send({ error: "invalid_signature" });
         if (!eventId || !eventType)
             return reply.code(400).send({ error: "missing_headers" });
-        const inserted = repo.insertWebhook(eventId, eventType, raw);
-        return reply.code(202).send({ accepted: true, duplicate: !inserted });
+        const duplicate = await processDialEvent(eventId, eventType, raw);
+        return reply.code(202).send({ accepted: true, duplicate });
     });
     app.setErrorHandler((error, _request, reply) => {
         if (error instanceof DomainRuleError)

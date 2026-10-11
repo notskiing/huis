@@ -68,6 +68,8 @@ Edit `.env.local` for local configuration. Never commit real credentials, phone 
 | `DIAL_WEBHOOK_SECRET` | Dial webhook signing secret. |
 | `DIAL_ALLOWLIST_E164` | Only live destinations permitted outside production. |
 | `LIVE_DIAL_TEST` | Must be `1` for the opt-in smoke script. |
+| `DIAL_EVENT_STREAM_ENABLED` | Set `true` for the local live demo to ingest authenticated Dial events without a public webhook URL. |
+| `DIAL_INTAKE_PROPERTY_ID` | Property that receives inbound Dial tickets; defaults to `property_demo`. |
 | `KEEWANO_ENABLED` | Enables the required live maintenance timeline; set `true` in hosted environments. |
 | `KEEWANO_PROJECT_API_KEY` | Keewano SDK-type project key from Settings → API Keys. |
 | `KEEWANO_DATA_DIR` | Private persistent queue directory, unique to each service process/replica. |
@@ -108,7 +110,7 @@ It still requires a configured SDK key, Dial number ID, an explicitly allowliste
 
 ## Integration status
 
-- **Dial:** official `@getdial/sdk` seam implemented; live credentials belong only in `.env.local`. SDK and webhook contracts rechecked against official documentation on 2026-10-11.
+- **Dial:** inbound SMS creates a ticket from `message.received`; inbound voice creates one only after `call.transcribed` retrieves the completed inbound transcript. Local demos may use the authenticated Dial event stream; deployed instances should use the signed public webhook. Marking a scheduled request resolved starts one allowlisted tenant callback with no automatic retries. SDK and webhook contracts rechecked against official documentation on 2026-10-11.
 - **Keewano:** required for the live maintenance timeline. Huis writes redacted domain events to the local outbox in the same transaction as workflow changes, delivers them through the official Node SDK, retries temporary failures, and marks permanent failures/dead letters without blocking maintenance work. The local audit trail remains authoritative during provider outages.
 - **Sparta:** `SKIPPED` unless the documented participant build and an observable supported world are supplied. Local safety evals always run.
 

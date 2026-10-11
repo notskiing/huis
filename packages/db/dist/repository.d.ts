@@ -8,6 +8,7 @@ export declare class RelayRepository {
     resetDemo(now?: Date): void;
     saveRequest(request: MaintenanceRequest): void;
     getRequest(id: string): MaintenanceRequest | null;
+    personPhone(id: string): string | null;
     updateRequestStatus(id: string, status: RequestStatus, version: number, updatedAt: string): boolean;
     saveApproval(approval: Approval): void;
     getApproval(id: string): Approval | null;
@@ -28,6 +29,8 @@ export declare class RelayRepository {
     markAnalyticsDelivered(id: string, deliveredAt?: string): void;
     markAnalyticsFailed(id: string, error: string, permanent: boolean, nextAttemptAt: string | null): void;
     insertWebhook(eventId: string, eventType: string, rawBody: string): boolean;
+    markWebhookProcessed(eventId: string): void;
+    releaseWebhookForRetry(eventId: string): void;
     properties(): Array<Record<string, unknown>>;
     dashboard(propertyId?: string): Record<string, unknown>;
 }

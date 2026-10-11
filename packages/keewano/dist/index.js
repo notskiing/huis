@@ -31,7 +31,8 @@ function eventValue(event) {
         case "BOOKING_APPROVAL_REQUESTED":
         case "APPROVAL_REQUESTED": return token(payload.purpose ?? event.eventName);
         case "OUTREACH_APPROVED":
-        case "BOOKING_APPROVED": return "approved";
+        case "BOOKING_APPROVED":
+        case "APPROVAL_DECIDED": return token(payload.outcome, "approved");
         case "VENDOR_OUTREACH_STARTED": return token(payload.provider);
         case "VENDOR_CALL_COMPLETED": return token(payload.provider);
         case "QUOTE_CAPTURED": return token(payload.currency, "USD");
@@ -54,7 +55,8 @@ function emitEvent(event, reporter) {
         case "BOOKING_APPROVAL_REQUESTED":
         case "APPROVAL_REQUESTED": return batchReportApprovalRequested(reporter, value);
         case "OUTREACH_APPROVED":
-        case "BOOKING_APPROVED": return batchReportApprovalDecided(reporter, value);
+        case "BOOKING_APPROVED":
+        case "APPROVAL_DECIDED": return batchReportApprovalDecided(reporter, value);
         case "VENDOR_OUTREACH_STARTED": return batchReportVendorOutreachStarted(reporter, value);
         case "VENDOR_CALL_COMPLETED": return batchReportVendorCallCompleted(reporter, value);
         case "QUOTE_CAPTURED": return batchReportQuoteCaptured(reporter, value);
