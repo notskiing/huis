@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { RelayRepository } from "@relaypm/db";
 import { createApp } from "./app.js";
-describe("RelayPM API workflow", () => {
+describe("Huis API workflow", () => {
     it("requires both approval gates", async () => {
         const repo = new RelayRepository();
         repo.resetDemo();

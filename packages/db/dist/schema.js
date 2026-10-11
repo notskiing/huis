@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS webhook_inbox (
 CREATE TABLE IF NOT EXISTS domain_events (
   id TEXT PRIMARY KEY, aggregate_type TEXT NOT NULL, aggregate_id TEXT NOT NULL, event_name TEXT NOT NULL,
   payload_redacted_json TEXT NOT NULL, created_at TEXT NOT NULL,
-  analytics_delivery_status TEXT NOT NULL, analytics_attempts INTEGER NOT NULL DEFAULT 0
+  analytics_delivery_status TEXT NOT NULL, analytics_attempts INTEGER NOT NULL DEFAULT 0,
+  analytics_last_error TEXT, analytics_next_attempt_at TEXT, analytics_delivered_at TEXT
 );
 CREATE TABLE IF NOT EXISTS external_operations (
   id TEXT PRIMARY KEY, request_id TEXT NOT NULL, kind TEXT NOT NULL, provider TEXT NOT NULL,

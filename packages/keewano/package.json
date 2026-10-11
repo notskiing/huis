@@ -2,7 +2,7 @@
   "name": "@relaypm/keewano",
   "version": "0.1.0",
   "type": "module",
-  "exports": "./src/index.ts",
-  "dependencies": { "@relaypm/core": "workspace:*" },
-  "scripts": { "typecheck": "tsc --noEmit" }
+  "exports": { ".": { "types": "./src/index.ts", "default": "./dist/index.js" } },
+  "dependencies": { "@keewano/node-sdk": "^1.3.0-207", "@relaypm/core": "workspace:*" },
+  "scripts": { "typecheck": "tsc --noEmit", "build": "tsc -p tsconfig.build.json" }
 }

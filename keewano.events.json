@@ -1,0 +1,15 @@
+{
+  "events": [
+    { "eventName": "MaintenanceRequested", "eventValueType": "string" },
+    { "eventName": "UrgencyClassified", "eventValueType": "string" },
+    { "eventName": "UrgentIssueRouted", "eventValueType": "string" },
+    { "eventName": "ApprovalRequested", "eventValueType": "string" },
+    { "eventName": "ApprovalDecided", "eventValueType": "string" },
+    { "eventName": "VendorOutreachStarted", "eventValueType": "string" },
+    { "eventName": "VendorCallCompleted", "eventValueType": "string" },
+    { "eventName": "QuoteCaptured", "eventValueType": "string" },
+    { "eventName": "AppointmentConfirmed", "eventValueType": "string" },
+    { "eventName": "RequestResolved", "eventValueType": "string" },
+    { "eventName": "IntegrationFallbackActivated", "eventValueType": "string" }
+  ]
+}

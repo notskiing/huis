@@ -1,0 +1,5 @@
+{
+  "input": "keewano.events.json",
+  "target": "node",
+  "code": "packages/keewano/src/generated"
+}

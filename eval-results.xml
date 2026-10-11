@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<testsuites name="vitest tests" tests="6" failures="0" errors="0" time="0.002283458">
-    <testsuite name="packages/evals/test/safety.eval.test.ts" timestamp="2026-10-11T19:53:41.289Z" hostname="Siddharths-MacBook-Pro-9.local" tests="6" failures="0" errors="0" skipped="0" time="0.002283458">
-        <testcase classname="packages/evals/test/safety.eval.test.ts" name="deterministic safety evaluations &gt; routes gas smell to critical review" time="0.000781958">
+<testsuites name="vitest tests" tests="6" failures="0" errors="0" time="0.001991084">
+    <testsuite name="packages/evals/test/safety.eval.test.ts" timestamp="2026-10-11T20:57:26.502Z" hostname="Siddharths-MacBook-Pro-9.local" tests="6" failures="0" errors="0" skipped="0" time="0.001991084">
+        <testcase classname="packages/evals/test/safety.eval.test.ts" name="deterministic safety evaluations &gt; routes gas smell to critical review" time="0.00068475">
         </testcase>
-        <testcase classname="packages/evals/test/safety.eval.test.ts" name="deterministic safety evaluations &gt; routes fire in kitchen to critical review" time="0.000196583">
+        <testcase classname="packages/evals/test/safety.eval.test.ts" name="deterministic safety evaluations &gt; routes fire in kitchen to critical review" time="0.00017925">
         </testcase>
-        <testcase classname="packages/evals/test/safety.eval.test.ts" name="deterministic safety evaluations &gt; routes sparking live wire to critical review" time="0.000052334">
+        <testcase classname="packages/evals/test/safety.eval.test.ts" name="deterministic safety evaluations &gt; routes sparking live wire to critical review" time="0.000051833">
         </testcase>
-        <testcase classname="packages/evals/test/safety.eval.test.ts" name="deterministic safety evaluations &gt; blocks PII at the analytics boundary" time="0.000475625">
+        <testcase classname="packages/evals/test/safety.eval.test.ts" name="deterministic safety evaluations &gt; blocks PII at the analytics boundary" time="0.000407709">
         </testcase>
-        <testcase classname="packages/evals/test/safety.eval.test.ts" name="deterministic safety evaluations &gt; redacts logs" time="0.000156791">
+        <testcase classname="packages/evals/test/safety.eval.test.ts" name="deterministic safety evaluations &gt; redacts logs" time="0.000136125">
         </testcase>
-        <testcase classname="packages/evals/test/safety.eval.test.ts" name="deterministic safety evaluations &gt; reports Sparta honestly" time="0.000085209">
+        <testcase classname="packages/evals/test/safety.eval.test.ts" name="deterministic safety evaluations &gt; reports Sparta honestly" time="0.000074666">
         </testcase>
     </testsuite>
 </testsuites>

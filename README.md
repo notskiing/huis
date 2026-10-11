@@ -17,7 +17,7 @@ It also includes a critical-safety path that stops vendor automation and routes 
 - Central state machine, optimistic concurrency, rule-first urgency, and version-scoped single-use approvals.
 - Separate approvals for quote-only vendor outreach and capped/time-bounded booking.
 - Official Dial SDK adapter and exact-body HMAC verification with timestamp rejection and event deduplication.
-- Durable analytics outbox with Keewano disabled by default; no guessed Keewano SDK calls.
+- Keewano-backed maintenance timeline with generated custom events, a durable local outbox, retry/dead-letter handling, and a safe local fallback when the provider is unavailable.
 - Deterministic unit, integration, and safety evaluation suites. Sparta is reported as skipped until a documented participant build/world is configured.
 
 The seeded demo uses sample provider outcomes. The UI labels them as a demo; no real call, text, email, payment, booking, or access disclosure occurs without provider configuration and the required guardrails.
@@ -62,10 +62,19 @@ Copy `.env.example` and replace placeholders locally. Never commit real credenti
 | `DIAL_WEBHOOK_SECRET` | Dial webhook signing secret. |
 | `DIAL_ALLOWLIST_E164` | Only live destinations permitted outside production. |
 | `LIVE_DIAL_TEST` | Must be `1` for the opt-in smoke script. |
-| `KEEWANO_ENABLED` | Queues analytics for a generated Keewano adapter; `false` by default. |
+| `KEEWANO_ENABLED` | Enables the required live maintenance timeline; set `true` in hosted environments. |
+| `KEEWANO_PROJECT_API_KEY` | Keewano SDK-type project key from Settings → API Keys. |
+| `KEEWANO_DATA_DIR` | Private persistent queue directory, unique to each service process/replica. |
+| `KEEWANO_ENDPOINT` | Optional Keewano ingress override for staging/self-hosted use. |
 | `SPARTA_ENABLED` | Indicates an official supported participant runner is configured. |
 
 The MongoDB adapter lives in [`packages/db/src/mongo.ts`](./packages/db/src/mongo.ts). It uses separate collections for requests, approvals, interactions, quotes, appointments, audit events, webhook inbox records, and domain events. It is intentionally not connected until the URI and driver are supplied. When you are ready to turn it on, add the official driver with `pnpm add mongodb -w`, set `MONGODB_URI`, and deploy the API with the same environment. Email intake is modeled and demo-ready, but a live mailbox provider is deliberately not guessed.
+
+Keewano is configured through the official Node relay SDK. The event schema is [`keewano.events.json`](./keewano.events.json), and the generated Node helpers live in [`packages/keewano/src/generated/keewano-events.generated.ts`](./packages/keewano/src/generated/keewano-events.generated.ts). To regenerate after appending an event (never reorder existing events):
+
+```bash
+npx keewano-codegen --target node --code packages/keewano/src/generated --input keewano.events.json
+```
 
 ## Checks
 
@@ -89,7 +98,7 @@ It still requires a configured SDK key, Dial number ID, an explicitly allowliste
 ## Integration status
 
 - **Dial:** official `@getdial/sdk` seam implemented; the live key belongs in `.env.local`, never `.env.example`. SDK and webhook contracts rechecked against official documentation on 2026-10-11.
-- **Keewano:** durable outbox and safe payload boundary implemented. Delivery remains disabled until official custom-event codegen output is supplied.
+- **Keewano:** required for the live maintenance timeline. Huis writes redacted domain events to the local outbox in the same transaction as workflow changes, delivers them through the official Node SDK, retries temporary failures, and marks permanent failures/dead letters without blocking maintenance work. The local audit trail remains authoritative during provider outages.
 - **Sparta:** `SKIPPED` unless the documented participant build and an observable supported world are supplied. Local safety evals always run.
 
 ## Repository layout

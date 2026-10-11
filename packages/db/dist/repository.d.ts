@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import type { Approval, AuditEvent, MaintenanceRequest, RequestStatus, VendorQuote } from "@relaypm/core";
+import { type Approval, type AuditEvent, type MaintenanceRequest, type RequestStatus, type VendorQuote } from "@relaypm/core";
 export declare class RelayRepository {
     readonly db: DatabaseSync;
     constructor(path?: string);
@@ -14,6 +14,16 @@ export declare class RelayRepository {
     saveQuote(quote: VendorQuote): void;
     addAudit(requestId: string, eventName: string, actorType: AuditEvent["actorType"], actorId: string | null, payload: Record<string, unknown>, createdAt?: string): void;
     addDomainEvent(requestId: string, eventName: string, payload: Record<string, unknown>, createdAt?: string): void;
+    pendingAnalyticsEvents(limit?: number, now?: string): Array<{
+        id: string;
+        aggregateId: string;
+        eventName: string;
+        payload: Record<string, unknown>;
+        createdAt: string;
+        attempts: number;
+    }>;
+    markAnalyticsDelivered(id: string, deliveredAt?: string): void;
+    markAnalyticsFailed(id: string, error: string, permanent: boolean, nextAttemptAt: string | null): void;
     insertWebhook(eventId: string, eventType: string, rawBody: string): boolean;
     dashboard(): Record<string, unknown>;
 }

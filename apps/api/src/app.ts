@@ -6,6 +6,7 @@ import cors from "@fastify/cors";
 import { approve, classifyUrgency, consumeApproval, createApproval, DomainRuleError, transitionRequest, type MaintenanceRequest, type VendorQuote } from "@relaypm/core";
 import { encrypt, RelayRepository } from "@relaypm/db";
 import { verifyDialWebhook } from "@relaypm/dial";
+import { KeewanoOutbox, KeewanoTimeline } from "@relaypm/keewano";
 
 function databasePath(): string {
   const configured = process.env.DATABASE_URL ?? "file:./.data/huis.db";
@@ -18,6 +19,10 @@ function databasePath(): string {
 
 export function createApp(repo = new RelayRepository(databasePath())) {
   const app = Fastify({ logger: false });
+  const keewanoTimeline = new KeewanoTimeline();
+  const keewanoOutbox = new KeewanoOutbox(repo, keewanoTimeline);
+  void keewanoOutbox.start();
+  app.addHook("onClose", async () => { await keewanoOutbox.stop(); });
   app.removeContentTypeParser("application/json");
   app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
     (request as typeof request & { rawBody: string }).rawBody = body as string;
@@ -29,8 +34,16 @@ export function createApp(repo = new RelayRepository(databasePath())) {
   const hasSeed = repo.db.prepare("SELECT COUNT(*) AS n FROM properties").get() as { n: number };
   if (!hasSeed.n) repo.resetDemo();
 
-  app.get("/health", async () => ({ ok: true, service: "huis-api", storage: process.env.MONGODB_URI ? "mongodb-configured" : "local-demo" }));
-  app.get("/api/dashboard", async () => ({ ...repo.dashboard(), intakeEmail: process.env.TENANT_INTAKE_EMAIL ?? "maintenance@your-domain.com", storage: process.env.MONGODB_URI ? "mongodb-configured" : "local-demo" }));
+  app.get("/health", async () => ({ ok: true, service: "huis-api", storage: process.env.MONGODB_URI ? "mongodb-configured" : "local-demo", integrations: { keewano: keewanoTimeline.status } }));
+  app.get("/api/dashboard", async () => {
+    const dashboard = repo.dashboard();
+    return {
+      ...dashboard,
+      integrations: { ...(dashboard.integrations as Record<string, unknown>), keewano: keewanoTimeline.status },
+      intakeEmail: process.env.TENANT_INTAKE_EMAIL ?? "maintenance@your-domain.com",
+      storage: process.env.MONGODB_URI ? "mongodb-configured" : "local-demo",
+    };
+  });
 
   app.post("/api/demo/reset", async () => {
     repo.resetDemo();
@@ -65,8 +78,11 @@ export function createApp(repo = new RelayRepository(databasePath())) {
     if (isCritical) repo.addAudit(id, "HUMAN_ESCALATION_REQUIRED", "SYSTEM", null, { automationStopped: true, guidance: "Contact emergency services or the gas utility and leave danger when appropriate." });
     if (!isCritical) {
       repo.saveApproval(createApproval({ id: `approval_${randomUUID()}`, request: item, requestedFromPersonId: "person_landlord", kind: "VENDOR_OUTREACH", scope: { vendorIds: ["vendor_plumber"], purpose: "QUOTE_ONLY" }, expiresAt: new Date(now.getTime() + 4 * 60 * 60_000) }));
+      repo.addDomainEvent(id, "approval_requested", { purpose: "VENDOR_OUTREACH" }, new Date(now.getTime() + 2).toISOString());
     }
-    repo.addDomainEvent(id, isCritical ? "urgent_issue_routed" : "maintenance_requested", { severity: urgency.severity, category: item.category, channel: scenario === "email" ? "EMAIL" : "VOICE" });
+    repo.addDomainEvent(id, "maintenance_requested", { severity: urgency.severity, category: item.category, channel: scenario === "email" ? "EMAIL" : "VOICE" }, now.toISOString());
+    repo.addDomainEvent(id, "urgency_classified", { severity: urgency.severity }, new Date(now.getTime() + 1).toISOString());
+    if (isCritical) repo.addDomainEvent(id, "urgent_issue_routed", { severity: urgency.severity }, new Date(now.getTime() + 2).toISOString());
     reply.code(201);
     return repo.dashboard();
   });
@@ -85,6 +101,7 @@ export function createApp(repo = new RelayRepository(databasePath())) {
       repo.db.prepare("INSERT INTO external_operations VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(`op_${randomUUID()}`, item.id, "VENDOR_QUOTE_CALL", "DIAL_SIMULATED", `sim_call_${randomUUID()}`, JSON.stringify({ vendorIds: consumed.scope.vendorIds, purpose: "QUOTE_ONLY" }), "SUCCEEDED_SIMULATED", new Date().toISOString());
       repo.addAudit(item.id, "OUTREACH_APPROVED", "LANDLORD", "person_landlord", { vendors: consumed.scope.vendorIds, purpose: "QUOTE_ONLY" });
       repo.addAudit(item.id, "VENDOR_OUTREACH_STARTED", "SYSTEM", null, { provider: "DIAL_SIMULATED", commitmentAllowed: false });
+      repo.addDomainEvent(item.id, "approval_decided", { outcome: "approved", purpose: "VENDOR_OUTREACH" });
       repo.addDomainEvent(item.id, "vendor_outreach_started", { severity: item.severity, category: item.category, vendorCount: consumed.scope.vendorIds?.length ?? 0 });
       repo.db.exec("COMMIT");
     } catch (error) { repo.db.exec("ROLLBACK"); throw error; }
@@ -113,6 +130,7 @@ export function createApp(repo = new RelayRepository(databasePath())) {
       repo.saveApproval(booking);
       repo.addAudit(item.id, "QUOTE_CAPTURED", "SYSTEM", null, { amountMinCents: 18500, amountMaxCents: 24000, confidence: 0.91, humanVerified: false });
       repo.addAudit(item.id, "BOOKING_APPROVAL_REQUESTED", "SYSTEM", null, { amountCeilingCents: 24000, vendorId: "vendor_plumber" });
+      repo.addDomainEvent(item.id, "approval_requested", { purpose: "BOOKING" });
       repo.addDomainEvent(item.id, "quote_captured", { severity: item.severity, category: item.category, elapsedMilliseconds: now.getTime() - Date.parse(item.createdAt) });
       repo.db.exec("COMMIT");
     } catch (error) { repo.db.exec("ROLLBACK"); throw error; }
@@ -136,6 +154,7 @@ export function createApp(repo = new RelayRepository(databasePath())) {
       repo.db.prepare("INSERT INTO appointments VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(`appt_${randomUUID()}`, item.id, quote.vendor_id, quote.id, consumed.id, window.start, window.end, "CONFIRMED_SIMULATED", "Vendor confirmed the approved window. No payment or access code was authorized.", new Date().toISOString());
       repo.addAudit(item.id, "BOOKING_APPROVED", "LANDLORD", "person_landlord", { vendorId: quote.vendor_id, amountCeilingCents: consumed.scope.amountCeilingCents, windowStart: window.start, windowEnd: window.end });
       repo.addAudit(item.id, "APPOINTMENT_CONFIRMED", "SYSTEM", null, { provider: "DIAL_SIMULATED", tenantNotified: true, landlordNotified: true, paymentAuthorized: false, accessCodeShared: false });
+      repo.addDomainEvent(item.id, "approval_decided", { outcome: "approved", purpose: "BOOKING" });
       repo.addDomainEvent(item.id, "appointment_confirmed", { severity: item.severity, category: item.category, elapsedMilliseconds: Date.now() - Date.parse(item.createdAt) });
       repo.db.exec("COMMIT");
     } catch (error) { repo.db.exec("ROLLBACK"); throw error; }

@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
+import { assertAnalyticsSafe } from "@relaypm/core";
 import { encrypt } from "./crypto.js";
 import { migration } from "./schema.js";
 function parseRequest(row) {
@@ -22,6 +23,16 @@ export class RelayRepository {
     constructor(path = ":memory:") {
         this.db = new DatabaseSync(path);
         this.db.exec(migration);
+        for (const statement of [
+            "ALTER TABLE domain_events ADD COLUMN analytics_last_error TEXT",
+            "ALTER TABLE domain_events ADD COLUMN analytics_next_attempt_at TEXT",
+            "ALTER TABLE domain_events ADD COLUMN analytics_delivered_at TEXT",
+        ]) {
+            try {
+                this.db.exec(statement);
+            }
+            catch { /* Existing databases already have the column. */ }
+        }
     }
     close() { this.db.close(); }
     resetDemo(now = new Date()) {
@@ -62,6 +73,8 @@ export class RelayRepository {
             this.addAudit(request.id, "URGENCY_CLASSIFIED", "SYSTEM", null, { severity: "ROUTINE", ruleFlags: [] }, new Date(now.getTime() - 17 * 60_000).toISOString());
             this.addAudit(request.id, "OUTREACH_APPROVAL_REQUESTED", "SYSTEM", null, { vendorCount: 1, purpose: "QUOTE_ONLY" }, new Date(now.getTime() - 16 * 60_000).toISOString());
             this.addDomainEvent(request.id, "maintenance_requested", { severity: "ROUTINE", category: "Plumbing", channel: "SMS" }, created);
+            this.addDomainEvent(request.id, "urgency_classified", { severity: "ROUTINE" }, new Date(now.getTime() - 17 * 60_000).toISOString());
+            this.addDomainEvent(request.id, "approval_requested", { purpose: "VENDOR_OUTREACH" }, new Date(now.getTime() - 16 * 60_000).toISOString());
             this.db.exec("COMMIT");
         }
         catch (error) {
@@ -104,7 +117,31 @@ export class RelayRepository {
         this.db.prepare("INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(randomUUID(), "MaintenanceRequest", requestId, eventName, actorType, actorId, JSON.stringify(payload), createdAt);
     }
     addDomainEvent(requestId, eventName, payload, createdAt = new Date().toISOString()) {
-        this.db.prepare("INSERT INTO domain_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(randomUUID(), "MaintenanceRequest", requestId, eventName, JSON.stringify(payload), createdAt, process.env.KEEWANO_ENABLED === "true" ? "PENDING" : "SKIPPED_DISABLED", 0);
+        assertAnalyticsSafe(payload);
+        this.db.prepare(`INSERT INTO domain_events
+      (id, aggregate_type, aggregate_id, event_name, payload_redacted_json, created_at, analytics_delivery_status, analytics_attempts)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(randomUUID(), "MaintenanceRequest", requestId, eventName, JSON.stringify(payload), createdAt, process.env.KEEWANO_ENABLED === "true" ? "PENDING" : "SKIPPED_DISABLED", 0);
+    }
+    pendingAnalyticsEvents(limit = 50, now = new Date().toISOString()) {
+        const rows = this.db.prepare(`SELECT * FROM domain_events
+      WHERE analytics_delivery_status='PENDING'
+      AND (analytics_next_attempt_at IS NULL OR analytics_next_attempt_at <= ?)
+      ORDER BY created_at ASC LIMIT ?`).all(now, limit);
+        return rows.map((row) => ({
+            id: row.id, aggregateId: row.aggregate_id, eventName: row.event_name,
+            payload: JSON.parse(row.payload_redacted_json), createdAt: row.created_at, attempts: row.analytics_attempts,
+        }));
+    }
+    markAnalyticsDelivered(id, deliveredAt = new Date().toISOString()) {
+        this.db.prepare(`UPDATE domain_events SET analytics_delivery_status='DELIVERED', analytics_delivered_at=?, analytics_last_error=NULL,
+      analytics_next_attempt_at=NULL WHERE id=?`).run(deliveredAt, id);
+    }
+    markAnalyticsFailed(id, error, permanent, nextAttemptAt) {
+        const row = this.db.prepare("SELECT analytics_attempts FROM domain_events WHERE id=?").get(id);
+        const attempts = Number(row?.analytics_attempts ?? 0) + 1;
+        const status = permanent ? "FAILED_PERMANENT" : attempts >= 8 ? "DEAD_LETTER" : "PENDING";
+        this.db.prepare(`UPDATE domain_events SET analytics_delivery_status=?, analytics_attempts=?, analytics_last_error=?, analytics_next_attempt_at=? WHERE id=?`)
+            .run(status, attempts, error.slice(0, 500), status === "PENDING" ? nextAttemptAt : null, id);
     }
     insertWebhook(eventId, eventType, rawBody) {
         return this.db.prepare("INSERT OR IGNORE INTO webhook_inbox VALUES (?, ?, ?, ?, ?, ?)").run("DIAL", eventId, eventType, encrypt(rawBody), new Date().toISOString(), null).changes === 1;
@@ -133,13 +170,14 @@ export class RelayRepository {
         const approvalsDue = Number(this.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE status='PENDING'").get().n);
         const urgent = Number(this.db.prepare("SELECT COUNT(*) AS n FROM maintenance_requests WHERE severity IN ('URGENT','CRITICAL') AND status NOT IN ('RESOLVED','CANCELLED')").get().n);
         const outboxPending = Number(this.db.prepare("SELECT COUNT(*) AS n FROM domain_events WHERE analytics_delivery_status='PENDING'").get().n);
+        const outboxFailed = Number(this.db.prepare("SELECT COUNT(*) AS n FROM domain_events WHERE analytics_delivery_status IN ('FAILED_PERMANENT','DEAD_LETTER')").get().n);
         return {
             property: { id: "property_demo", name: "Juniper House", unit: "2B", timezone: "America/Los_Angeles" },
             requests, vendors,
             metrics: { open, approvalsDue, urgent, medianResolutionHours: 3.2 },
             integrations: {
                 dial: process.env.DIAL_API_KEY ? "configured" : "simulation",
-                keewano: process.env.KEEWANO_ENABLED === "true" ? (outboxPending ? "degraded" : "live") : "disabled",
+                keewano: process.env.KEEWANO_ENABLED === "true" ? (outboxPending || outboxFailed ? "degraded" : "live") : "disabled",
                 sparta: process.env.SPARTA_ENABLED === "true" ? "configured" : "skipped",
             },
         };
