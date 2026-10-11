@@ -11,6 +11,7 @@ It also includes a critical-safety path that stops vendor automation and routes 
 ## What is working
 
 - Responsive landlord review console with request queue, vendors, immutable activity history, integration health, and one-click demo scenarios.
+- Property picker before the inbox, with every request and timeline event scoped to the selected property.
 - Tenant intake modeled across Dial voice/SMS and email attachments. There is intentionally no tenant portal.
 - A MongoDB document-store boundary for cloud use, with Node 24 SQLite as the zero-setup local fallback.
 - AES-256-GCM encryption for phone numbers, addresses, access notes, message bodies, transcripts, and raw webhook bodies.
@@ -18,6 +19,7 @@ It also includes a critical-safety path that stops vendor automation and routes 
 - Separate approvals for quote-only vendor outreach and capped/time-bounded booking.
 - Official Dial SDK adapter and exact-body HMAC verification with timestamp rejection and event deduplication.
 - Keewano-backed maintenance timeline with generated custom events, a durable local outbox, retry/dead-letter handling, and a safe local fallback when the provider is unavailable.
+- Optional OpenAI agent planner that recommends which Huis roles should handle a request. It is off by default and cannot take actions.
 - Deterministic unit, integration, and safety evaluation suites. Sparta is reported as skipped until a documented participant build/world is configured.
 
 The seeded demo uses sample provider outcomes. The UI labels them as a demo; no real call, text, email, payment, booking, or access disclosure occurs without provider configuration and the required guardrails.
@@ -57,6 +59,9 @@ Copy `.env.example` and replace placeholders locally. Never commit real credenti
 | `DATA_ENCRYPTION_KEY` | Production encryption key for sensitive columns. |
 | `APPROVAL_SIGNING_SECRET` | Approval-link/token signing secret for a hosted deployment. |
 | `TENANT_INTAKE_EMAIL` | Address tenants use for photos and documents; defaults to `maintenance@your-domain.com`. |
+| `OPENAI_AGENT_ENABLED` | Set `true` to enable the optional role planner; leave `false` while testing. |
+| `OPENAI_API_KEY` | OpenAI project key for the planner. |
+| `OPENAI_MODEL` | Model ID for planning; default `gpt-6-luna`. |
 | `DIAL_API_KEY` | Enables the live Dial adapter. Leave empty for the demo. |
 | `DIAL_PHONE_NUMBER_ID` | Dial phone-number ID used for calls and SMS. |
 | `DIAL_WEBHOOK_SECRET` | Dial webhook signing secret. |
@@ -75,6 +80,8 @@ Keewano is configured through the official Node relay SDK. The event schema is [
 ```bash
 npx keewano-codegen --target node --code packages/keewano/src/generated --input keewano.events.json
 ```
+
+The agent planner lives in [`packages/agentic/src/index.ts`](./packages/agentic/src/index.ts). It sends only redacted fields (category, severity, status, source, and rule flags) to the OpenAI Responses API. Without a key, it uses the same deterministic rules already used by the workflow. With a key, it asks `gpt-6-luna` for a structured role recommendation and then adds Huis's safety roles back if the request is urgent or critical.
 
 ## Checks
 
@@ -111,6 +118,7 @@ packages/core  state machine, urgency, approvals, redaction
 packages/db    schema, encryption, repositories, demo seed
 packages/dial  official SDK boundary and webhook verification
 packages/keewano privacy-safe analytics boundary
+packages/agentic optional OpenAI role planner with deterministic fallback
 packages/evals deterministic safety scenarios
 ```
 

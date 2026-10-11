@@ -6,6 +6,7 @@ import cors from "@fastify/cors";
 import { approve, classifyUrgency, consumeApproval, createApproval, DomainRuleError, transitionRequest } from "@relaypm/core";
 import { encrypt, RelayRepository } from "@relaypm/db";
 import { verifyDialWebhook } from "@relaypm/dial";
+import { AgentPlanner } from "@relaypm/agentic";
 import { KeewanoOutbox, KeewanoTimeline } from "@relaypm/keewano";
 function databasePath() {
     const configured = process.env.DATABASE_URL ?? "file:./.data/huis.db";
@@ -20,6 +21,7 @@ export function createApp(repo = new RelayRepository(databasePath())) {
     const app = Fastify({ logger: false });
     const keewanoTimeline = new KeewanoTimeline();
     const keewanoOutbox = new KeewanoOutbox(repo, keewanoTimeline);
+    const agentPlanner = new AgentPlanner();
     void keewanoOutbox.start();
     app.addHook("onClose", async () => { await keewanoOutbox.stop(); });
     app.removeContentTypeParser("application/json");
@@ -36,15 +38,30 @@ export function createApp(repo = new RelayRepository(databasePath())) {
     const hasSeed = repo.db.prepare("SELECT COUNT(*) AS n FROM properties").get();
     if (!hasSeed.n)
         repo.resetDemo();
+    repo.ensurePickerDemoProperty();
     app.get("/health", async () => ({ ok: true, service: "huis-api", storage: process.env.MONGODB_URI ? "mongodb-configured" : "local-demo", integrations: { keewano: keewanoTimeline.status } }));
-    app.get("/api/dashboard", async () => {
-        const dashboard = repo.dashboard();
+    app.get("/api/properties", async () => ({ properties: repo.properties() }));
+    app.get("/api/dashboard", async (request, reply) => {
+        const propertyId = request.query.propertyId ?? "property_demo";
+        let dashboard;
+        try {
+            dashboard = repo.dashboard(propertyId);
+        }
+        catch {
+            return reply.code(404).send({ error: "PROPERTY_NOT_FOUND", message: "Property not found" });
+        }
         return {
             ...dashboard,
             integrations: { ...dashboard.integrations, keewano: keewanoTimeline.status },
             intakeEmail: process.env.TENANT_INTAKE_EMAIL ?? "maintenance@your-domain.com",
             storage: process.env.MONGODB_URI ? "mongodb-configured" : "local-demo",
         };
+    });
+    app.get("/api/requests/:id/agent-plan", async (request, reply) => {
+        const item = repo.getRequest(request.params.id);
+        if (!item)
+            return reply.code(404).send({ error: "NOT_FOUND", message: "Request not found" });
+        return agentPlanner.plan({ category: item.category, severity: item.severity, status: item.status, source: item.source, ruleFlags: item.ruleFlags });
     });
     app.post("/api/demo/reset", async () => {
         repo.resetDemo();
@@ -60,8 +77,12 @@ export function createApp(repo = new RelayRepository(databasePath())) {
         const urgency = classifyUrgency(text);
         const id = `req_${randomUUID()}`;
         const source = scenario === "email" ? "WEB" : "VOICE";
+        const propertyId = request.body?.propertyId ?? "property_demo";
+        const unit = repo.db.prepare("SELECT id FROM units WHERE property_id=? ORDER BY label LIMIT 1").get(propertyId);
+        if (!unit)
+            return reply.code(404).send({ error: "PROPERTY_NOT_FOUND", message: "Property not found" });
         const item = {
-            id, propertyId: "property_demo", unitId: "unit_2b", reporterPersonId: "person_tenant", source,
+            id, propertyId, unitId: unit.id, reporterPersonId: "person_tenant", source,
             category: isCritical ? "Gas / life safety" : "Water intrusion", severity: urgency.severity,
             summary: isCritical ? "Tenant reports a gas odor near the stove and an active alarm." : "Tenant emailed photos and an inspection PDF showing dampness at the bedroom window.",
             status: urgency.severity === "ROUTINE" ? "AWAITING_OUTREACH_APPROVAL" : "HUMAN_REVIEW",
@@ -82,7 +103,7 @@ export function createApp(repo = new RelayRepository(databasePath())) {
         if (isCritical)
             repo.addDomainEvent(id, "urgent_issue_routed", { severity: urgency.severity }, new Date(now.getTime() + 2).toISOString());
         reply.code(201);
-        return repo.dashboard();
+        return repo.dashboard(item.propertyId);
     });
     app.post("/api/requests/:id/approve-outreach", async (request) => {
         const item = repo.getRequest(request.params.id);
@@ -107,7 +128,7 @@ export function createApp(repo = new RelayRepository(databasePath())) {
             repo.db.exec("ROLLBACK");
             throw error;
         }
-        return repo.dashboard();
+        return repo.dashboard(item.propertyId);
     });
     app.post("/api/requests/:id/simulate-quote", async (request) => {
         const item = repo.getRequest(request.params.id);
@@ -140,7 +161,7 @@ export function createApp(repo = new RelayRepository(databasePath())) {
             repo.db.exec("ROLLBACK");
             throw error;
         }
-        return repo.dashboard();
+        return repo.dashboard(item.propertyId);
     });
     app.post("/api/requests/:id/approve-booking", async (request) => {
         const item = repo.getRequest(request.params.id);
@@ -169,7 +190,7 @@ export function createApp(repo = new RelayRepository(databasePath())) {
             repo.db.exec("ROLLBACK");
             throw error;
         }
-        return repo.dashboard();
+        return repo.dashboard(item.propertyId);
     });
     app.post("/webhooks/dial", { config: { rawBody: true } }, async (request, reply) => {
         const signature = String(request.headers["x-dial-signature"] ?? "");

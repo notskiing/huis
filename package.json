@@ -11,7 +11,7 @@
     "build": "pnpm -r --if-present build",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "pnpm -r --if-present typecheck",
-    "test": "vitest run packages/core/test packages/db/test packages/keewano/src/index.test.ts",
+    "test": "vitest run packages/core/test packages/db/test packages/keewano/src/index.test.ts packages/agentic/src/index.test.ts",
     "test:integration": "vitest run apps/api/src/app.test.ts packages/dial/src/webhook.test.ts",
     "test:eval": "vitest run packages/evals/test --reporter=default --reporter=junit --outputFile.junit=eval-results.xml",
     "test:dial:smoke": "tsx scripts/dial-smoke.ts"

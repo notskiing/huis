@@ -2,6 +2,17 @@
   "name": "@relaypm/dial",
   "version": "0.1.0",
   "type": "module",
-  "exports": { ".": { "types": "./src/index.ts", "default": "./dist/index.js" } },
-  "scripts": { "build": "tsc -p tsconfig.build.json", "typecheck": "tsc --noEmit" }
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@getdial/sdk": "0.21.0"
+  }
 }

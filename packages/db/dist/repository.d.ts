@@ -4,6 +4,7 @@ export declare class RelayRepository {
     readonly db: DatabaseSync;
     constructor(path?: string);
     close(): void;
+    ensurePickerDemoProperty(): void;
     resetDemo(now?: Date): void;
     saveRequest(request: MaintenanceRequest): void;
     getRequest(id: string): MaintenanceRequest | null;
@@ -25,5 +26,6 @@ export declare class RelayRepository {
     markAnalyticsDelivered(id: string, deliveredAt?: string): void;
     markAnalyticsFailed(id: string, error: string, permanent: boolean, nextAttemptAt: string | null): void;
     insertWebhook(eventId: string, eventType: string, rawBody: string): boolean;
-    dashboard(): Record<string, unknown>;
+    properties(): Array<Record<string, unknown>>;
+    dashboard(propertyId?: string): Record<string, unknown>;
 }

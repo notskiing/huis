@@ -40,6 +40,11 @@ export class RelayRepository {
 
   close(): void { this.db.close(); }
 
+  ensurePickerDemoProperty(): void {
+    this.db.prepare("INSERT OR IGNORE INTO properties VALUES (?, ?, ?, ?, ?, ?)").run("property_cedar", "Cedar Court", "America/Los_Angeles", encrypt("42 Cedar Court, Oakland, CA"), "person_landlord", "policy_demo");
+    this.db.prepare("INSERT OR IGNORE INTO units VALUES (?, ?, ?, ?, ?)").run("unit_1a", "property_cedar", "1A", JSON.stringify([]), encrypt("No tenant contact has been added yet"));
+  }
+
   resetDemo(now = new Date()): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -56,6 +61,8 @@ export class RelayRepository {
       for (const [id, role, name, phone] of people) insertPerson.run(id, role, name, encrypt(phone), JSON.stringify({ sms: true, voice: true }), "en-US");
       this.db.prepare("INSERT INTO properties VALUES (?, ?, ?, ?, ?, ?)").run("property_demo", "Juniper House", "America/Los_Angeles", encrypt("1480 Juniper Street, Oakland, CA"), "person_landlord", "policy_demo");
       this.db.prepare("INSERT INTO units VALUES (?, ?, ?, ?, ?)").run("unit_2b", "property_demo", "2B", JSON.stringify(["person_tenant"]), encrypt("Coordinate all access with tenant"));
+      this.db.prepare("INSERT INTO properties VALUES (?, ?, ?, ?, ?, ?)").run("property_cedar", "Cedar Court", "America/Los_Angeles", encrypt("42 Cedar Court, Oakland, CA"), "person_landlord", "policy_demo");
+      this.db.prepare("INSERT INTO units VALUES (?, ?, ?, ?, ?)").run("unit_1a", "property_cedar", "1A", JSON.stringify([]), encrypt("No tenant contact has been added yet"));
       const insertVendor = this.db.prepare("INSERT INTO vendors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
       insertVendor.run("vendor_plumber", "Plumbing", "Bluebird Plumbing", 1, 1, encrypt("+14155550103"), "Oakland / Berkeley", 1, "Preferred vendor · insured");
       insertVendor.run("vendor_electrician", "Electrical", "Brightline Electric", 1, 1, encrypt("+14155550104"), "East Bay", 0, "Licensed · weekday service");
@@ -172,8 +179,23 @@ export class RelayRepository {
     return this.db.prepare("INSERT OR IGNORE INTO webhook_inbox VALUES (?, ?, ?, ?, ?, ?)").run("DIAL", eventId, eventType, encrypt(rawBody), new Date().toISOString(), null).changes === 1;
   }
 
-  dashboard(): Record<string, unknown> {
-    const requestRows = this.db.prepare("SELECT * FROM maintenance_requests ORDER BY updated_at DESC").all() as Row[];
+  properties(): Array<Record<string, unknown>> {
+    const rows = this.db.prepare(`SELECT p.id, p.name, p.timezone,
+      (SELECT COUNT(*) FROM units u WHERE u.property_id=p.id) AS unit_count,
+      (SELECT COUNT(*) FROM maintenance_requests r WHERE r.property_id=p.id AND r.status NOT IN ('RESOLVED','CANCELLED')) AS open,
+      (SELECT COUNT(*) FROM maintenance_requests r WHERE r.property_id=p.id AND r.severity IN ('URGENT','CRITICAL') AND r.status NOT IN ('RESOLVED','CANCELLED')) AS urgent,
+      (SELECT MAX(r.updated_at) FROM maintenance_requests r WHERE r.property_id=p.id) AS latest_event_at
+      FROM properties p ORDER BY p.name`).all() as Row[];
+    return rows.map((row) => ({
+      id: row.id, name: row.name, timezone: row.timezone, unitCount: Number(row.unit_count ?? 0),
+      open: Number(row.open ?? 0), urgent: Number(row.urgent ?? 0), latestEventAt: row.latest_event_at ?? null,
+    }));
+  }
+
+  dashboard(propertyId = "property_demo"): Record<string, unknown> {
+    const property = this.db.prepare("SELECT id, name, timezone FROM properties WHERE id=?").get(propertyId) as Row | undefined;
+    if (!property) throw new Error("Property not found");
+    const requestRows = this.db.prepare("SELECT * FROM maintenance_requests WHERE property_id=? ORDER BY updated_at DESC").all(propertyId) as Row[];
     const requests = requestRows.map((row) => {
       const request = parseRequest(row);
       const approvals = (this.db.prepare("SELECT * FROM approvals WHERE maintenance_request_id=? ORDER BY rowid").all(request.id) as Row[]).map(parseApproval);
@@ -192,14 +214,20 @@ export class RelayRepository {
       return { ...request, approvals, quotes, interactions, audit, appointment: appointment ? { startAt: appointment.start_at, endAt: appointment.end_at, status: appointment.status } : null };
     });
     const vendors = (this.db.prepare("SELECT id, trade, business_name, approved, active, service_area, after_hours, notes FROM vendors").all() as Row[]).map((v) => ({ id: v.id, trade: v.trade, businessName: v.business_name, approved: Boolean(v.approved), active: Boolean(v.active), serviceArea: v.service_area, afterHours: Boolean(v.after_hours), notes: v.notes }));
-    const open = Number((this.db.prepare("SELECT COUNT(*) AS n FROM maintenance_requests WHERE status NOT IN ('RESOLVED','CANCELLED')").get() as Row).n);
-    const approvalsDue = Number((this.db.prepare("SELECT COUNT(*) AS n FROM approvals WHERE status='PENDING'").get() as Row).n);
-    const urgent = Number((this.db.prepare("SELECT COUNT(*) AS n FROM maintenance_requests WHERE severity IN ('URGENT','CRITICAL') AND status NOT IN ('RESOLVED','CANCELLED')").get() as Row).n);
-    const outboxPending = Number((this.db.prepare("SELECT COUNT(*) AS n FROM domain_events WHERE analytics_delivery_status='PENDING'").get() as Row).n);
-    const outboxFailed = Number((this.db.prepare("SELECT COUNT(*) AS n FROM domain_events WHERE analytics_delivery_status IN ('FAILED_PERMANENT','DEAD_LETTER')").get() as Row).n);
+    const open = Number((this.db.prepare("SELECT COUNT(*) AS n FROM maintenance_requests WHERE property_id=? AND status NOT IN ('RESOLVED','CANCELLED')").get(propertyId) as Row).n);
+    const approvalsDue = Number((this.db.prepare("SELECT COUNT(*) AS n FROM approvals a JOIN maintenance_requests r ON r.id=a.maintenance_request_id WHERE r.property_id=? AND a.status='PENDING'").get(propertyId) as Row).n);
+    const urgent = Number((this.db.prepare("SELECT COUNT(*) AS n FROM maintenance_requests WHERE property_id=? AND severity IN ('URGENT','CRITICAL') AND status NOT IN ('RESOLVED','CANCELLED')").get(propertyId) as Row).n);
+    const outboxPending = Number((this.db.prepare("SELECT COUNT(*) AS n FROM domain_events e JOIN maintenance_requests r ON r.id=e.aggregate_id WHERE r.property_id=? AND e.analytics_delivery_status='PENDING'").get(propertyId) as Row).n);
+    const outboxFailed = Number((this.db.prepare("SELECT COUNT(*) AS n FROM domain_events e JOIN maintenance_requests r ON r.id=e.aggregate_id WHERE r.property_id=? AND e.analytics_delivery_status IN ('FAILED_PERMANENT','DEAD_LETTER')").get(propertyId) as Row).n);
+    const timeline = (this.db.prepare(`SELECT e.id, e.event_name, e.aggregate_id, e.created_at, e.analytics_delivery_status, r.category
+      FROM domain_events e JOIN maintenance_requests r ON r.id=e.aggregate_id
+      WHERE r.property_id=? ORDER BY e.created_at DESC LIMIT 40`).all(propertyId) as Row[]).map((event) => ({
+      id: event.id, eventName: event.event_name, requestId: event.aggregate_id, category: event.category,
+      createdAt: event.created_at, deliveryStatus: event.analytics_delivery_status,
+    }));
     return {
-      property: { id: "property_demo", name: "Juniper House", unit: "2B", timezone: "America/Los_Angeles" },
-      requests, vendors,
+      property: { id: property.id, name: property.name, unit: String((this.db.prepare("SELECT label FROM units WHERE property_id=? ORDER BY label LIMIT 1").get(propertyId) as Row | undefined)?.label ?? "—"), timezone: property.timezone },
+      requests, vendors, timeline,
       metrics: { open, approvalsDue, urgent, medianResolutionHours: 3.2 },
       integrations: {
         dial: process.env.DIAL_API_KEY ? "configured" : "simulation",
