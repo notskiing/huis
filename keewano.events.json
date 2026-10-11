@@ -10,6 +10,7 @@
     { "eventName": "QuoteCaptured", "eventValueType": "string" },
     { "eventName": "AppointmentConfirmed", "eventValueType": "string" },
     { "eventName": "RequestResolved", "eventValueType": "string" },
-    { "eventName": "IntegrationFallbackActivated", "eventValueType": "string" }
+    { "eventName": "IntegrationFallbackActivated", "eventValueType": "string" },
+    { "eventName": "PropertyStatusSnapshot", "eventValueType": "string" }
   ]
 }

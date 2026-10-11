@@ -6,7 +6,19 @@
  * boundary: each domain record lives in its own collection, with request and
  * approval IDs kept stable for webhook retries and audit joins.
  */
-export type HuisCollection = "properties" | "units" | "people" | "vendors" | "requests" | "interactions" | "approvals" | "quotes" | "appointments" | "auditEvents" | "webhookInbox" | "domainEvents" | "externalOperations";
+export type HuisCollection = "properties" | "units" | "people" | "vendors" | "requests" | "interactions" | "approvals" | "quotes" | "appointments" | "auditEvents" | "webhookInbox" | "domainEvents" | "externalOperations" | "internalDocuments";
+export type InternalPropertyDocument = {
+    id: string;
+    propertyId: string;
+    kind: "rent" | "tax" | "utility" | "insurance" | "note";
+    title: string;
+    amountCents?: number;
+    currency?: string;
+    periodStart?: string;
+    periodEnd?: string;
+    storageKey?: string;
+    notes?: string;
+};
 type MongoCollection = {
     updateOne(filter: Record<string, unknown>, update: Record<string, unknown>, options?: Record<string, unknown>): Promise<unknown>;
     insertOne(document: Record<string, unknown>): Promise<unknown>;
@@ -40,6 +52,8 @@ export declare class MongoDocumentStore {
     findOne(name: HuisCollection, filter: Record<string, unknown>): Promise<Record<string, unknown> | null>;
     recent(name: HuisCollection, filter?: Record<string, unknown>, limit?: number): Promise<Array<Record<string, unknown>>>;
     count(name: HuisCollection, filter?: Record<string, unknown>): Promise<number>;
+    upsertInternalDocument(document: InternalPropertyDocument): Promise<void>;
+    recentInternalDocuments(propertyId: string, limit?: number): Promise<Array<Record<string, unknown>>>;
 }
 export declare function mongoConfigFromEnv(): {
     uri: string;

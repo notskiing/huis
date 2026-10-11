@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { approve, classifyUrgency, consumeApproval, createApproval, DomainRuleError, transitionRequest } from "@relaypm/core";
-import { encrypt, RelayRepository } from "@relaypm/db";
+import { encrypt, MongoDocumentStore, mongoConfigFromEnv, RelayRepository } from "@relaypm/db";
 import { verifyDialWebhook } from "@relaypm/dial";
 import { AgentPlanner } from "@relaypm/agentic";
 import { KeewanoOutbox, KeewanoTimeline } from "@relaypm/keewano";
@@ -22,8 +22,14 @@ export function createApp(repo = new RelayRepository(databasePath())) {
     const keewanoTimeline = new KeewanoTimeline();
     const keewanoOutbox = new KeewanoOutbox(repo, keewanoTimeline);
     const agentPlanner = new AgentPlanner();
+    const mongoConfig = mongoConfigFromEnv();
+    const mongoStore = mongoConfig ? new MongoDocumentStore(mongoConfig) : null;
+    let mongoStatus = mongoStore ? "connecting" : "disabled";
+    const mongoReady = mongoStore
+        ? mongoStore.connect().then(() => { mongoStatus = "connected"; }).catch((error) => { mongoStatus = "error"; console.warn(`[huis] MongoDB connection failed: ${error instanceof Error ? error.message : "unknown error"}`); })
+        : Promise.resolve();
     void keewanoOutbox.start();
-    app.addHook("onClose", async () => { await keewanoOutbox.stop(); });
+    app.addHook("onClose", async () => { await keewanoOutbox.stop(); await mongoReady; await mongoStore?.close(); });
     app.removeContentTypeParser("application/json");
     app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
         request.rawBody = body;
@@ -39,7 +45,18 @@ export function createApp(repo = new RelayRepository(databasePath())) {
     if (!hasSeed.n)
         repo.resetDemo();
     repo.ensurePickerDemoProperty();
-    app.get("/health", async () => ({ ok: true, service: "huis-api", storage: process.env.MONGODB_URI ? "mongodb-configured" : "local-demo", integrations: { keewano: keewanoTimeline.status } }));
+    const statusIntervalMs = Number(process.env.KEEWANO_STATUS_INTERVAL_MS ?? 60 * 60 * 1000);
+    const publishPropertyStatuses = async () => {
+        const updatedAt = new Date().toISOString();
+        for (const property of repo.properties())
+            repo.recordPropertyStatusSnapshot(String(property.id), updatedAt);
+        await keewanoOutbox.drainOnce();
+    };
+    void publishPropertyStatuses();
+    const statusTimer = setInterval(() => { void publishPropertyStatuses(); }, statusIntervalMs);
+    statusTimer.unref();
+    app.addHook("onClose", async () => { clearInterval(statusTimer); });
+    app.get("/health", async () => ({ ok: true, service: "huis-api", storage: mongoStatus === "connected" ? "mongodb-configured" : "local-demo", integrations: { keewano: keewanoTimeline.status, mongodb: mongoStatus } }));
     app.get("/api/properties", async () => ({ properties: repo.properties() }));
     app.get("/api/dashboard", async (request, reply) => {
         const propertyId = request.query.propertyId ?? "property_demo";
@@ -54,8 +71,25 @@ export function createApp(repo = new RelayRepository(databasePath())) {
             ...dashboard,
             integrations: { ...dashboard.integrations, keewano: keewanoTimeline.status },
             intakeEmail: process.env.TENANT_INTAKE_EMAIL ?? "maintenance@your-domain.com",
-            storage: process.env.MONGODB_URI ? "mongodb-configured" : "local-demo",
+            storage: mongoStatus === "connected" ? "mongodb-configured" : "local-demo",
         };
+    });
+    app.get("/api/properties/:id/internal-documents", async (request, reply) => {
+        await mongoReady;
+        if (!mongoStore || mongoStatus !== "connected")
+            return reply.code(503).send({ error: "MONGODB_UNAVAILABLE", message: "MongoDB is not configured or connected" });
+        return { documents: await mongoStore.recentInternalDocuments(request.params.id) };
+    });
+    app.post("/api/properties/:id/internal-documents", async (request, reply) => {
+        await mongoReady;
+        if (!mongoStore || mongoStatus !== "connected")
+            return reply.code(503).send({ error: "MONGODB_UNAVAILABLE", message: "MongoDB is not configured or connected" });
+        const body = request.body ?? {};
+        if (!body.kind || !body.title)
+            return reply.code(400).send({ error: "INVALID_DOCUMENT", message: "kind and title are required" });
+        const document = { ...body, id: body.id ?? randomUUID(), propertyId: request.params.id };
+        await mongoStore.upsertInternalDocument(document);
+        return reply.code(201).send({ document });
     });
     app.get("/api/requests/:id/agent-plan", async (request, reply) => {
         const item = repo.getRequest(request.params.id);
@@ -65,6 +99,7 @@ export function createApp(repo = new RelayRepository(databasePath())) {
     });
     app.post("/api/demo/reset", async () => {
         repo.resetDemo();
+        await publishPropertyStatuses();
         return repo.dashboard();
     });
     app.post("/api/demo/intake", async (request, reply) => {
@@ -102,6 +137,7 @@ export function createApp(repo = new RelayRepository(databasePath())) {
         repo.addDomainEvent(id, "urgency_classified", { severity: urgency.severity }, new Date(now.getTime() + 1).toISOString());
         if (isCritical)
             repo.addDomainEvent(id, "urgent_issue_routed", { severity: urgency.severity }, new Date(now.getTime() + 2).toISOString());
+        await publishPropertyStatuses();
         reply.code(201);
         return repo.dashboard(item.propertyId);
     });
@@ -128,6 +164,7 @@ export function createApp(repo = new RelayRepository(databasePath())) {
             repo.db.exec("ROLLBACK");
             throw error;
         }
+        await publishPropertyStatuses();
         return repo.dashboard(item.propertyId);
     });
     app.post("/api/requests/:id/simulate-quote", async (request) => {
@@ -161,6 +198,7 @@ export function createApp(repo = new RelayRepository(databasePath())) {
             repo.db.exec("ROLLBACK");
             throw error;
         }
+        await publishPropertyStatuses();
         return repo.dashboard(item.propertyId);
     });
     app.post("/api/requests/:id/approve-booking", async (request) => {
@@ -190,6 +228,7 @@ export function createApp(repo = new RelayRepository(databasePath())) {
             repo.db.exec("ROLLBACK");
             throw error;
         }
+        await publishPropertyStatuses();
         return repo.dashboard(item.propertyId);
     });
     app.post("/webhooks/dial", { config: { rawBody: true } }, async (request, reply) => {

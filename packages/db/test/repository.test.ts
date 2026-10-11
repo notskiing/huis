@@ -19,4 +19,13 @@ describe("encrypted repository",()=>{
     expect(repo.insertWebhook("evt_1","message.received","{}")).toBe(false);
     repo.close();
   });
+  it("records a property status snapshot for the Keewano outbox",()=>{
+    const repo=new RelayRepository(); repo.resetDemo(new Date("2026-10-11T16:00:00Z"));
+    repo.recordPropertyStatusSnapshot("property_demo", "2026-10-11T16:05:00Z");
+    const dashboard=repo.dashboard() as any;
+    expect(dashboard.propertyStatus).toMatchObject({ statusKey:"approval_due", statusLabel:"Landlord approval needed", openRequests:1, approvalsDue:1, updatedAt:"2026-10-11T16:05:00Z" });
+    const event=repo.db.prepare("SELECT aggregate_type, event_name FROM domain_events WHERE aggregate_type='Property'").get() as any;
+    expect(event).toEqual({aggregate_type:"Property", event_name:"property_status_snapshot"});
+    repo.close();
+  });
 });

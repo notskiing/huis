@@ -64,6 +64,11 @@ CREATE TABLE IF NOT EXISTS domain_events (
   analytics_delivery_status TEXT NOT NULL, analytics_attempts INTEGER NOT NULL DEFAULT 0,
   analytics_last_error TEXT, analytics_next_attempt_at TEXT, analytics_delivered_at TEXT
 );
+CREATE TABLE IF NOT EXISTS property_status_snapshots (
+  property_id TEXT PRIMARY KEY, status_key TEXT NOT NULL, status_label TEXT NOT NULL,
+  open_requests INTEGER NOT NULL, urgent_requests INTEGER NOT NULL, approvals_due INTEGER NOT NULL,
+  updated_at TEXT NOT NULL, source TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS external_operations (
   id TEXT PRIMARY KEY, request_id TEXT NOT NULL, kind TEXT NOT NULL, provider TEXT NOT NULL,
   provider_external_id TEXT, intent_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL

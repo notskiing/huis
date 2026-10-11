@@ -34,6 +34,12 @@ export class MongoDocumentStore {
     async findOne(name, filter) { return this.collection(name).findOne(filter); }
     async recent(name, filter = {}, limit = 100) { return this.collection(name).find(filter).sort({ createdAt: -1 }).limit(limit).toArray(); }
     async count(name, filter = {}) { return this.collection(name).countDocuments(filter); }
+    async upsertInternalDocument(document) {
+        await this.upsert("internalDocuments", document.id, { ...document, class: "internal" });
+    }
+    async recentInternalDocuments(propertyId, limit = 100) {
+        return this.recent("internalDocuments", { propertyId }, limit);
+    }
 }
 export function mongoConfigFromEnv() {
     if (!process.env.MONGODB_URI)

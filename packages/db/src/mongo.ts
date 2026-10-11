@@ -9,7 +9,20 @@
 export type HuisCollection =
   | "properties" | "units" | "people" | "vendors" | "requests" | "interactions"
   | "approvals" | "quotes" | "appointments" | "auditEvents" | "webhookInbox"
-  | "domainEvents" | "externalOperations";
+  | "domainEvents" | "externalOperations" | "internalDocuments";
+
+export type InternalPropertyDocument = {
+  id: string;
+  propertyId: string;
+  kind: "rent" | "tax" | "utility" | "insurance" | "note";
+  title: string;
+  amountCents?: number;
+  currency?: string;
+  periodStart?: string;
+  periodEnd?: string;
+  storageKey?: string;
+  notes?: string;
+};
 
 type MongoCollection = {
   updateOne(filter: Record<string, unknown>, update: Record<string, unknown>, options?: Record<string, unknown>): Promise<unknown>;
@@ -62,6 +75,14 @@ export class MongoDocumentStore {
   async findOne(name: HuisCollection, filter: Record<string, unknown>): Promise<Record<string, unknown> | null> { return this.collection(name).findOne(filter); }
   async recent(name: HuisCollection, filter: Record<string, unknown> = {}, limit = 100): Promise<Array<Record<string, unknown>>> { return this.collection(name).find(filter).sort({ createdAt: -1 }).limit(limit).toArray(); }
   async count(name: HuisCollection, filter: Record<string, unknown> = {}): Promise<number> { return this.collection(name).countDocuments(filter); }
+
+  async upsertInternalDocument(document: InternalPropertyDocument): Promise<void> {
+    await this.upsert("internalDocuments", document.id, { ...document, class: "internal" });
+  }
+
+  async recentInternalDocuments(propertyId: string, limit = 100): Promise<Array<Record<string, unknown>>> {
+    return this.recent("internalDocuments", { propertyId }, limit);
+  }
 }
 
 export function mongoConfigFromEnv(): { uri: string; databaseName: string; collectionPrefix: string } | null {

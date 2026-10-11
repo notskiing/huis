@@ -21,6 +21,7 @@ type Dashboard = {
   property:{id:string;name:string;unit:string;timezone:string}; requests:RequestItem[]; vendors:Array<any>; timeline:TimelineEvent[];
   metrics:{open:number;approvalsDue:number;urgent:number;medianResolutionHours:number};
   integrations:{dial:string;keewano:string;sparta:string}; intakeEmail:string;
+  propertyStatus:{statusKey:string;statusLabel:string;openRequests:number;urgentRequests:number;approvalsDue:number;updatedAt:string;source:string}|null;
 };
 
 const statusLabels: Record<string,string> = {
@@ -130,6 +131,16 @@ function RequestDetail({item,property,act,busy,onClose}:{item:RequestItem;proper
   </section>
 }
 
+function KeewanoStatusPanel({status}:{status:Dashboard["propertyStatus"]}){
+  if(!status) return <div className="keewano-status-card keewano-empty"><div><span className="eyebrow">KEEWANO STATUS</span><strong>Waiting for the first update</strong><p>The hourly property snapshot will appear here once the timeline has a status.</p></div></div>;
+  const delivered=status.source==="KEEWANO_DELIVERED";
+  return <div className="keewano-status-card">
+    <div className="keewano-status-main"><span className="eyebrow">KEEWANO STATUS</span><strong>{status.statusLabel}</strong><p>{delivered?"Current property snapshot from Keewano.":"Snapshot queued locally; it will be sent to Keewano when available."}</p></div>
+    <div className="keewano-counts"><div><b>{status.openRequests}</b><span>Open</span></div><div><b>{status.urgentRequests}</b><span>Urgent</span></div><div><b>{status.approvalsDue}</b><span>Approvals</span></div></div>
+    <div className="keewano-status-foot"><span className={`keewano-source ${delivered?"live":"queued"}`}><i/>{delivered?"Live snapshot":"Queued locally"}</span><span>Updated {timeAgo(status.updatedAt)}</span></div>
+  </div>;
+}
+
 function EmptySection({section,data}:{section:string;data:Dashboard}){
   if(section==="Vendors") return <div className="page-section"><div className="page-title"><div><span>People you can call</span><h1>Approved vendors</h1><p>Only these contacts can be used without another approval.</p></div></div><div className="vendor-grid">{data.vendors.map(v=><div className="vendor-card" key={v.id}><div className="vendor-logo">{v.businessName.split(" ").map((w:string)=>w[0]).join("")}</div><div><span>{v.trade}</span><h3>{v.businessName}</h3><p>{v.serviceArea}</p></div><ShieldCheck className="verified"/><div className="vendor-tags"><em>Approved</em>{v.afterHours&&<em>After hours</em>}</div></div>)}</div></div>;
   return <div className="page-section"><div className="page-title"><div><span>What happened · {data.integrations.keewano==="live"?"KEEWANO":"LOCAL OUTBOX"}</span><h1>History</h1><p>Every request, decision, and call for {data.property.name} in time order.</p></div></div><div className="activity-table">{data.timeline.map(e=><div key={e.id}><span className="activity-icon"><Activity/></span><div><strong>{eventLabels[e.eventName]??e.eventName.replaceAll("_"," ")}</strong><p>{e.category} · {e.requestId.slice(-8)}</p></div><em>{fmtDate(e.createdAt)}</em><b>{e.deliveryStatus}</b></div>)}</div></div>;
@@ -137,7 +148,7 @@ function EmptySection({section,data}:{section:string;data:Dashboard}){
 
 export function App(){
   const [data,setData]=useState<Dashboard|null>(null); const [properties,setProperties]=useState<Property[]>([]); const [propertyId,setPropertyId]=useState<string|null>(null); const [selected,setSelected]=useState<string|null>(null);
-  const [section,setSection]=useState("Overview"); const [busy,setBusy]=useState(false); const [menu,setMenu]=useState(false); const [error,setError]=useState("");
+  const [section,setSection]=useState("Overview"); const [inboxTab,setInboxTab]=useState<"Requests"|"Keewano">("Requests"); const [busy,setBusy]=useState(false); const [menu,setMenu]=useState(false); const [error,setError]=useState("");
   useEffect(()=>{void (async()=>{try{const res=await fetch("/api/properties");if(!res.ok)throw new Error("API unavailable");const value=await res.json();setProperties(value.properties??[])}catch(e){setError(e instanceof Error?e.message:"Unable to load")}})()},[]);
   const load=async(id:string)=>{try{setError("");const res=await fetch(`/api/dashboard?propertyId=${encodeURIComponent(id)}`);if(!res.ok)throw new Error("Property unavailable");const value=await res.json();setData(value);setPropertyId(id);setSelected(value.requests[0]?.id??null)}catch(e){setError(e instanceof Error?e.message:"Unable to load")}};
   const act=async(path:string,body?:any)=>{setBusy(true);setError("");try{const res=await fetch(path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body??{})});const value=await res.json();if(!res.ok)throw new Error(value.message??"Action failed");if(propertyId){const refreshed=await fetch(`/api/dashboard?propertyId=${encodeURIComponent(propertyId)}`);setData(await refreshed.json())}else setData(value)}catch(e){setError(e instanceof Error?e.message:"Action failed")}finally{setBusy(false)}};
@@ -154,7 +165,7 @@ export function App(){
         <div className="stats"><StatCard icon={Wrench} label="Open requests" value={data.metrics.open} detail={`Across ${data.property.name}`} tone="sage"/><StatCard icon={ShieldCheck} label="Your approvals" value={data.metrics.approvalsDue} detail="Waiting for a decision" tone="amber"/><StatCard icon={AlertTriangle} label="Urgent" value={data.metrics.urgent} detail={data.metrics.urgent?"Human response needed":"Nothing escalated"} tone="rose"/><StatCard icon={Clock3} label="Median resolution" value={`${data.metrics.medianResolutionHours}h`} detail="Demo workflow average" tone="blue"/></div>
         <div className="intake-strip"><div><div className="intake-icon"><Mail/></div><p><strong>Tenants can send photos and documents to</strong><span>{data.intakeEmail}</span></p></div><button onClick={()=>navigator.clipboard?.writeText(data.intakeEmail)}>Copy address</button></div>
         <div className="workspace-grid">
-          <section className="queue"><div className="queue-head"><div><span>INBOX · {data.integrations.keewano==="live"?"KEEWANO TIMELINE":"LOCAL TIMELINE"}</span><h2>{section==="Requests"?"All requests":"Needs attention"}</h2></div><button><Plus/>New request</button></div><div className="queue-tabs"><button className="active">Active <b>{data.metrics.open}</b></button><button>Waiting</button><button>Closed</button></div><div className="request-list">{data.requests.map(item=><RequestCard key={item.id} item={item} property={data.property} selected={active?.id===item.id} onSelect={()=>setSelected(item.id)}/>)}</div>{!data.requests.length&&<div className="empty-inbox"><strong>No requests yet.</strong><span>This property’s timeline is ready for its first tenant report.</span></div>}</section>
+          <section className="queue"><div className="queue-head"><div><span>INBOX · {data.integrations.keewano==="live"?"KEEWANO TIMELINE":"LOCAL TIMELINE"}</span><h2>{data.propertyStatus?.statusLabel??"Waiting for first Keewano update"}</h2></div><button><Plus/>New request</button></div><div className="queue-tabs"><button className={inboxTab==="Requests"?"active":""} onClick={()=>setInboxTab("Requests")}>Active <b>{data.metrics.open}</b></button><button>Waiting</button><button>Closed</button><button className={`keewano-status-tab ${inboxTab==="Keewano"?"active":""}`} onClick={()=>setInboxTab("Keewano")}><span className="keewano-tab-mark">K</span>Keewano</button></div>{inboxTab==="Keewano"&&<KeewanoStatusPanel status={data.propertyStatus}/>}<div className="request-list">{data.requests.map(item=><RequestCard key={item.id} item={item} property={data.property} selected={active?.id===item.id} onSelect={()=>setSelected(item.id)}/>)}</div>{!data.requests.length&&<div className="empty-inbox"><strong>No requests yet.</strong><span>This property’s timeline is ready for its first tenant report.</span></div>}</section>
           {active&&<RequestDetail item={active} property={data.property} act={act} busy={busy} onClose={()=>setSelected(null)}/>}
         </div>
         <div className="trust-footer"><div><ShieldCheck/><p><strong>You make the decisions.</strong><span>Huis never books, spends, or shares access without your approval.</span></p></div><div className="system-pills"><IntegrationPill name="Keewano" status={data.integrations.keewano}/><IntegrationPill name="Sparta" status={data.integrations.sparta}/></div></div>

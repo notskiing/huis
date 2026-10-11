@@ -15,6 +15,8 @@ export declare class RelayRepository {
     saveQuote(quote: VendorQuote): void;
     addAudit(requestId: string, eventName: string, actorType: AuditEvent["actorType"], actorId: string | null, payload: Record<string, unknown>, createdAt?: string): void;
     addDomainEvent(requestId: string, eventName: string, payload: Record<string, unknown>, createdAt?: string): void;
+    recordPropertyStatusSnapshot(propertyId: string, updatedAt?: string): void;
+    propertyStatusSnapshot(propertyId: string): Record<string, unknown> | null;
     pendingAnalyticsEvents(limit?: number, now?: string): Array<{
         id: string;
         aggregateId: string;

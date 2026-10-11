@@ -30,9 +30,10 @@ Requirements: Node.js 24+ and pnpm 11+.
 
 ```bash
 pnpm install
-cp .env.example .env.local
 pnpm dev
 ```
+
+The app reads configuration from `/Users/kohli/Desktop/huis/.env.local`. Keep real credentials there and do not commit it.
 
 Open [http://localhost:3000](http://localhost:3000). The API listens on `127.0.0.1:3001`.
 
@@ -48,7 +49,7 @@ Use **Safety test** to create a gas-odor call. It is classified `CRITICAL`, ente
 
 ## Configuration
 
-Copy `.env.example` and replace placeholders locally. Never commit real credentials, phone numbers, addresses, recordings, or transcripts.
+Edit `.env.local` for local configuration. Never commit real credentials, phone numbers, addresses, recordings, or transcripts.
 
 | Variable | Purpose |
 |---|---|
@@ -71,15 +72,18 @@ Copy `.env.example` and replace placeholders locally. Never commit real credenti
 | `KEEWANO_PROJECT_API_KEY` | Keewano SDK-type project key from Settings → API Keys. |
 | `KEEWANO_DATA_DIR` | Private persistent queue directory, unique to each service process/replica. |
 | `KEEWANO_ENDPOINT` | Optional Keewano ingress override for staging/self-hosted use. |
+| `KEEWANO_STATUS_INTERVAL_MS` | Property status snapshot interval in milliseconds; defaults to one hour. Lower it only for local testing. |
 | `SPARTA_ENABLED` | Indicates an official supported participant runner is configured. |
 
-The MongoDB adapter lives in [`packages/db/src/mongo.ts`](./packages/db/src/mongo.ts). It uses separate collections for requests, approvals, interactions, quotes, appointments, audit events, webhook inbox records, and domain events. It is intentionally not connected until the URI and driver are supplied. When you are ready to turn it on, add the official driver with `pnpm add mongodb -w`, set `MONGODB_URI`, and deploy the API with the same environment. Email intake is modeled and demo-ready, but a live mailbox provider is deliberately not guessed.
+The MongoDB adapter lives in [`packages/db/src/mongo.ts`](./packages/db/src/mongo.ts). It is the cloud store for landlord-only internal documents such as rent, tax, utility, insurance, and notes. They are written to the `huis_internalDocuments` collection and exposed through `/api/properties/:id/internal-documents`. The app connects automatically when `MONGODB_URI` is set; with an empty URI, local SQLite remains the zero-setup fallback for the demo. Email intake is modeled and demo-ready, but a live mailbox provider is deliberately not guessed.
 
 Keewano is configured through the official Node relay SDK. The event schema is [`keewano.events.json`](./keewano.events.json), and the generated Node helpers live in [`packages/keewano/src/generated/keewano-events.generated.ts`](./packages/keewano/src/generated/keewano-events.generated.ts). To regenerate after appending an event (never reorder existing events):
 
 ```bash
 npx keewano-codegen --target node --code packages/keewano/src/generated --input keewano.events.json
 ```
+
+Every property gets a redacted `PropertyStatusSnapshot` event on startup and then hourly. The dashboard reads the local snapshot cache while the durable outbox sends the timestamped snapshot to Keewano, so the inbox can show the latest status even during a temporary provider outage.
 
 The agent planner lives in [`packages/agentic/src/index.ts`](./packages/agentic/src/index.ts). It sends only redacted fields (category, severity, status, source, and rule flags) to the OpenAI Responses API. Without a key, it uses the same deterministic rules already used by the workflow. With a key, it asks `gpt-6-luna` for a structured role recommendation and then adds Huis's safety roles back if the request is urgent or critical.
 
@@ -104,7 +108,7 @@ It still requires a configured SDK key, Dial number ID, an explicitly allowliste
 
 ## Integration status
 
-- **Dial:** official `@getdial/sdk` seam implemented; the live key belongs in `.env.local`, never `.env.example`. SDK and webhook contracts rechecked against official documentation on 2026-10-11.
+- **Dial:** official `@getdial/sdk` seam implemented; live credentials belong only in `.env.local`. SDK and webhook contracts rechecked against official documentation on 2026-10-11.
 - **Keewano:** required for the live maintenance timeline. Huis writes redacted domain events to the local outbox in the same transaction as workflow changes, delivers them through the official Node SDK, retries temporary failures, and marks permanent failures/dead letters without blocking maintenance work. The local audit trail remains authoritative during provider outages.
 - **Sparta:** `SKIPPED` unless the documented participant build and an observable supported world are supplied. Local safety evals always run.
 
@@ -115,7 +119,7 @@ apps/web       landlord operations console
 apps/api       HTTP API and Dial webhook ingress
 apps/worker    inbox/outbox worker entrypoint
 packages/core  state machine, urgency, approvals, redaction
-packages/db    schema, encryption, repositories, demo seed
+packages/db    schema, encryption, repositories, MongoDB document store, demo seed
 packages/dial  official SDK boundary and webhook verification
 packages/keewano privacy-safe analytics boundary
 packages/agentic optional OpenAI role planner with deterministic fallback

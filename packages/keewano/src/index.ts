@@ -14,6 +14,7 @@ import {
   batchReportUrgentIssueRouted,
   batchReportVendorCallCompleted,
   batchReportVendorOutreachStarted,
+  batchReportPropertyStatusSnapshot,
   customEventSet,
 } from "./generated/keewano-events.generated.js";
 
@@ -59,10 +60,13 @@ function eventValue(event: AnalyticsDomainEvent): string {
   const payload = event.payload;
   switch (event.eventName.toUpperCase()) {
     case "REQUEST_CREATED": return `${token(payload.channel, "unknown")}:${token(payload.category, "unknown")}`;
+    case "MAINTENANCE_REQUESTED": return `${token(payload.channel, "unknown")}:${token(payload.category, "unknown")}`;
     case "URGENCY_CLASSIFIED": return token(payload.severity);
     case "HUMAN_ESCALATION_REQUIRED": return token(payload.severity, "CRITICAL");
+    case "URGENT_ISSUE_ROUTED": return token(payload.severity, "CRITICAL");
     case "OUTREACH_APPROVAL_REQUESTED":
-    case "BOOKING_APPROVAL_REQUESTED": return token(payload.purpose ?? event.eventName);
+    case "BOOKING_APPROVAL_REQUESTED":
+    case "APPROVAL_REQUESTED": return token(payload.purpose ?? event.eventName);
     case "OUTREACH_APPROVED":
     case "BOOKING_APPROVED": return "approved";
     case "VENDOR_OUTREACH_STARTED": return token(payload.provider);
@@ -71,6 +75,7 @@ function eventValue(event: AnalyticsDomainEvent): string {
     case "APPOINTMENT_CONFIRMED": return "confirmed";
     case "REQUEST_RESOLVED": return "resolved";
     case "INTEGRATION_FALLBACK_ACTIVATED": return token(payload.reason);
+    case "PROPERTY_STATUS_SNAPSHOT": return `${token(payload.statusKey)}:${token(String(payload.openRequests ?? 0))}:${token(String(payload.urgentRequests ?? 0))}:${token(String(payload.approvalsDue ?? 0))}`;
     default: return token(event.eventName);
   }
 }
@@ -79,10 +84,13 @@ function emitEvent(event: AnalyticsDomainEvent, reporter: Parameters<typeof batc
   const value = eventValue(event);
   switch (event.eventName.toUpperCase()) {
     case "REQUEST_CREATED": return batchReportMaintenanceRequested(reporter, value);
+    case "MAINTENANCE_REQUESTED": return batchReportMaintenanceRequested(reporter, value);
     case "URGENCY_CLASSIFIED": return batchReportUrgencyClassified(reporter, value);
     case "HUMAN_ESCALATION_REQUIRED": return batchReportUrgentIssueRouted(reporter, value);
+    case "URGENT_ISSUE_ROUTED": return batchReportUrgentIssueRouted(reporter, value);
     case "OUTREACH_APPROVAL_REQUESTED":
-    case "BOOKING_APPROVAL_REQUESTED": return batchReportApprovalRequested(reporter, value);
+    case "BOOKING_APPROVAL_REQUESTED":
+    case "APPROVAL_REQUESTED": return batchReportApprovalRequested(reporter, value);
     case "OUTREACH_APPROVED":
     case "BOOKING_APPROVED": return batchReportApprovalDecided(reporter, value);
     case "VENDOR_OUTREACH_STARTED": return batchReportVendorOutreachStarted(reporter, value);
@@ -91,6 +99,7 @@ function emitEvent(event: AnalyticsDomainEvent, reporter: Parameters<typeof batc
     case "APPOINTMENT_CONFIRMED": return batchReportAppointmentConfirmed(reporter, value);
     case "REQUEST_RESOLVED": return batchReportRequestResolved(reporter, value);
     case "INTEGRATION_FALLBACK_ACTIVATED": return batchReportIntegrationFallbackActivated(reporter, value);
+    case "PROPERTY_STATUS_SNAPSHOT": return batchReportPropertyStatusSnapshot(reporter, value);
     default: throw new Error(`Unsupported Keewano domain event: ${event.eventName}`);
   }
 }

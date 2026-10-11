@@ -48,7 +48,7 @@ export class RelayRepository {
   resetDemo(now = new Date()): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      for (const table of ["external_operations", "domain_events", "webhook_inbox", "audit_events", "appointments", "vendor_quotes", "approvals", "interactions", "maintenance_requests", "vendors", "units", "people", "properties"]) {
+      for (const table of ["external_operations", "property_status_snapshots", "domain_events", "webhook_inbox", "audit_events", "appointments", "vendor_quotes", "approvals", "interactions", "maintenance_requests", "vendors", "units", "people", "properties"]) {
         this.db.exec(`DELETE FROM ${table}`);
       }
       const people: Array<[string, string, string, string]> = [
@@ -151,6 +151,34 @@ export class RelayRepository {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(randomUUID(), "MaintenanceRequest", requestId, eventName, JSON.stringify(payload), createdAt, process.env.KEEWANO_ENABLED === "true" ? "PENDING" : "SKIPPED_DISABLED", 0);
   }
 
+  recordPropertyStatusSnapshot(propertyId: string, updatedAt = new Date().toISOString()): void {
+    const openRequests = Number((this.db.prepare("SELECT COUNT(*) AS n FROM maintenance_requests WHERE property_id=? AND status NOT IN ('RESOLVED','CANCELLED')").get(propertyId) as Row).n);
+    const urgentRequests = Number((this.db.prepare("SELECT COUNT(*) AS n FROM maintenance_requests WHERE property_id=? AND severity IN ('URGENT','CRITICAL') AND status NOT IN ('RESOLVED','CANCELLED')").get(propertyId) as Row).n);
+    const approvalsDue = Number((this.db.prepare("SELECT COUNT(*) AS n FROM approvals a JOIN maintenance_requests r ON r.id=a.maintenance_request_id WHERE r.property_id=? AND a.status='PENDING'").get(propertyId) as Row).n);
+    const statusKey = urgentRequests > 0 ? "urgent" : approvalsDue > 0 ? "approval_due" : openRequests > 0 ? "in_progress" : "clear";
+    const statusLabel = urgentRequests > 0 ? "Human response needed" : approvalsDue > 0 ? "Landlord approval needed" : openRequests > 0 ? "Work in progress" : "All clear";
+    const payload = { statusKey, statusLabel, openRequests, urgentRequests, approvalsDue };
+    assertAnalyticsSafe(payload);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare(`INSERT INTO property_status_snapshots
+        (property_id, status_key, status_label, open_requests, urgent_requests, approvals_due, updated_at, source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(property_id) DO UPDATE SET status_key=excluded.status_key, status_label=excluded.status_label,
+        open_requests=excluded.open_requests, urgent_requests=excluded.urgent_requests, approvals_due=excluded.approvals_due,
+        updated_at=excluded.updated_at, source=excluded.source`).run(propertyId, statusKey, statusLabel, openRequests, urgentRequests, approvalsDue, updatedAt, "KEEWANO_PENDING");
+      this.db.prepare(`INSERT INTO domain_events
+        (id, aggregate_type, aggregate_id, event_name, payload_redacted_json, created_at, analytics_delivery_status, analytics_attempts)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(randomUUID(), "Property", propertyId, "property_status_snapshot", JSON.stringify(payload), updatedAt, process.env.KEEWANO_ENABLED === "true" ? "PENDING" : "SKIPPED_DISABLED", 0);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
+  propertyStatusSnapshot(propertyId: string): Record<string, unknown> | null {
+    const row = this.db.prepare("SELECT * FROM property_status_snapshots WHERE property_id=?").get(propertyId) as Row | undefined;
+    return row ? { statusKey: row.status_key, statusLabel: row.status_label, openRequests: row.open_requests, urgentRequests: row.urgent_requests, approvalsDue: row.approvals_due, updatedAt: row.updated_at, source: row.source } : null;
+  }
+
   pendingAnalyticsEvents(limit = 50, now = new Date().toISOString()): Array<{ id: string; aggregateId: string; eventName: string; payload: Record<string, unknown>; createdAt: string; attempts: number }> {
     const rows = this.db.prepare(`SELECT * FROM domain_events
       WHERE analytics_delivery_status='PENDING'
@@ -165,6 +193,8 @@ export class RelayRepository {
   markAnalyticsDelivered(id: string, deliveredAt = new Date().toISOString()): void {
     this.db.prepare(`UPDATE domain_events SET analytics_delivery_status='DELIVERED', analytics_delivered_at=?, analytics_last_error=NULL,
       analytics_next_attempt_at=NULL WHERE id=?`).run(deliveredAt, id);
+    this.db.prepare(`UPDATE property_status_snapshots SET source='KEEWANO_DELIVERED'
+      WHERE property_id=(SELECT aggregate_id FROM domain_events WHERE id=? AND aggregate_type='Property')`).run(id);
   }
 
   markAnalyticsFailed(id: string, error: string, permanent: boolean, nextAttemptAt: string | null): void {
@@ -227,7 +257,7 @@ export class RelayRepository {
     }));
     return {
       property: { id: property.id, name: property.name, unit: String((this.db.prepare("SELECT label FROM units WHERE property_id=? ORDER BY label LIMIT 1").get(propertyId) as Row | undefined)?.label ?? "—"), timezone: property.timezone },
-      requests, vendors, timeline,
+      propertyStatus: this.propertyStatusSnapshot(propertyId), requests, vendors, timeline,
       metrics: { open, approvalsDue, urgent, medianResolutionHours: 3.2 },
       integrations: {
         dial: process.env.DIAL_API_KEY ? "configured" : "simulation",
