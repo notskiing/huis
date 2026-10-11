@@ -271,6 +271,35 @@ export class RelayRepository {
     }));
   }
 
+  keewanoEvidence(propertyId?: string): { properties: Array<{ id: string; name: string }>; events: Array<Record<string, unknown>>; requests: Array<Record<string, unknown>> } {
+    const properties = (this.db.prepare("SELECT id, name FROM properties ORDER BY name").all() as Row[])
+      .filter((row) => !propertyId || String(row.id) === propertyId)
+      .map((row) => ({ id: String(row.id), name: String(row.name) }));
+    const eventRows = this.db.prepare(`SELECT e.event_name, e.aggregate_type, e.created_at,
+      COALESCE(p.id, property_from_event.id) AS property_id,
+      COALESCE(p.name, property_from_event.name) AS property_name,
+      r.category, r.severity, r.summary
+      FROM domain_events e
+      LEFT JOIN maintenance_requests r ON e.aggregate_type='MaintenanceRequest' AND e.aggregate_id=r.id
+      LEFT JOIN properties p ON p.id=r.property_id
+      LEFT JOIN properties property_from_event ON e.aggregate_type='Property' AND e.aggregate_id=property_from_event.id
+      WHERE (? IS NULL OR COALESCE(p.id, property_from_event.id)=?)
+      ORDER BY e.created_at DESC LIMIT 400`).all(propertyId ?? null, propertyId ?? null) as Row[];
+    const events = eventRows.map((row) => ({ eventName: String(row.event_name), aggregateType: String(row.aggregate_type), createdAt: String(row.created_at), propertyName: String(row.property_name ?? "Unknown property"), category: String(row.category ?? ""), severity: String(row.severity ?? ""), summary: String(row.summary ?? "") }));
+    const requestRows = this.db.prepare(`SELECT r.id, p.name AS property_name, r.category, r.severity, r.summary,
+      v.business_name AS vendor_name, r.created_at, r.updated_at, r.status
+      FROM maintenance_requests r JOIN properties p ON p.id=r.property_id
+      LEFT JOIN vendor_quotes q ON q.id=(SELECT q2.id FROM vendor_quotes q2 WHERE q2.maintenance_request_id=r.id ORDER BY q2.rowid DESC LIMIT 1)
+      LEFT JOIN vendors v ON v.id=q.vendor_id
+      WHERE (? IS NULL OR r.property_id=?) ORDER BY r.updated_at DESC LIMIT 200`).all(propertyId ?? null, propertyId ?? null) as Row[];
+    const requests = requestRows.map((row) => ({
+      id: String(row.id), propertyName: String(row.property_name), category: String(row.category), severity: String(row.severity), summary: String(row.summary),
+      vendorName: row.vendor_name ? String(row.vendor_name) : null, status: String(row.status),
+      resolutionHours: ["RESOLVED", "CANCELLED"].includes(String(row.status)) ? Math.max(0, (Date.parse(String(row.updated_at)) - Date.parse(String(row.created_at))) / 3_600_000) : null,
+    }));
+    return { properties, events, requests };
+  }
+
   dashboard(propertyId = "property_demo"): Record<string, unknown> {
     const property = this.db.prepare("SELECT id, name, timezone FROM properties WHERE id=?").get(propertyId) as Row | undefined;
     if (!property) throw new Error("Property not found");

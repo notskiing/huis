@@ -26,6 +26,122 @@ function vendorPersonId(vendorId: "vendor_plumber" | "vendor_electrician"): "per
   return vendorId === "vendor_electrician" ? "person_electrician" : "person_plumber";
 }
 
+function responseOutputText(body: { output_text?: unknown; output?: unknown }): string {
+  if (typeof body.output_text === "string") return body.output_text;
+  if (!Array.isArray(body.output)) return "";
+  for (const item of body.output) {
+    if (!item || typeof item !== "object" || !Array.isArray((item as { content?: unknown }).content)) continue;
+    for (const content of (item as { content: unknown[] }).content) {
+      if (content && typeof content === "object" && typeof (content as { text?: unknown }).text === "string") return (content as { text: string }).text;
+    }
+  }
+  return "";
+}
+
+function answerKeewanoQuestion(question: string, evidence: ReturnType<RelayRepository["keewanoEvidence"]>) {
+  const q = question.toLowerCase();
+  const heating = evidence.requests.filter((request) => /heat|hvac|thermostat|furnace|boiler|electric/i.test(`${String(request.category ?? "")} ${String(request.summary ?? "")}`));
+  const plumbing = evidence.requests.filter((request) => /plumb|water|leak|drain|pipe/i.test(`${String(request.category ?? "")} ${String(request.summary ?? "")}`));
+  if (/heating|hvac|thermostat|furnace|boiler/.test(q)) {
+    const counts = new Map<string, number>();
+    for (const request of heating) counts.set(String(request.propertyName ?? "Unknown property"), (counts.get(String(request.propertyName ?? "Unknown property")) ?? 0) + 1);
+    const repeated = [...counts.entries()].filter(([, count]) => count > 1).sort((a, b) => b[1] - a[1]);
+    return { answer: repeated.length ? repeated.map(([name, count]) => `${name} (${count} heating-related requests)`).join(", ") : "No home has more than one heating-related request in the available Keewano history.", highlights: repeated.map(([name, count]) => `${name}: ${count} heating-related request${count === 1 ? "" : "s"}`), source: "keewano" as const };
+  }
+  if (/fastest|plumb/.test(q)) {
+    const resolved = plumbing.filter((request) => typeof request.resolutionHours === "number").sort((a, b) => Number(a.resolutionHours) - Number(b.resolutionHours));
+    const fastest = resolved[0];
+    return { answer: fastest ? `${String(fastest.vendorName ?? "The recorded vendor")} has the fastest recorded plumbing resolution at ${Number(fastest.resolutionHours).toFixed(1)} hours.` : "There is not enough completed plumbing history to compare vendor speed yet.", highlights: fastest ? [`${String(fastest.propertyName ?? "Property")}: ${String(fastest.vendorName ?? "Vendor")} · ${Number(fastest.resolutionHours).toFixed(1)}h`] : [], source: "keewano" as const };
+  }
+  if (/urgent|becomes urgent|before/.test(q)) {
+    const urgent = evidence.requests.filter((request) => ["URGENT", "CRITICAL"].includes(String(request.severity ?? "")));
+    const routed = evidence.events.filter((event) => /urgent_issue_routed|urgency_classified/i.test(String(event.eventName ?? "")));
+    return { answer: urgent.length || routed.length ? `${urgent.length || routed.length} request${(urgent.length || routed.length) === 1 ? "" : "s"} reached an urgent workflow. The usual sequence is a tenant report, then urgency classification, then routing to the next action.` : "No urgent workflow is in the available Keewano history yet.", highlights: urgent.slice(0, 3).map((request) => `${String(request.propertyName ?? "Property")}: ${String(request.summary ?? "Urgent request")}`), source: "keewano" as const };
+  }
+  const eventCounts = new Map<string, number>();
+  for (const event of evidence.events) { const name = String(event.eventName ?? "unknown"); eventCounts.set(name, (eventCounts.get(name) ?? 0) + 1); }
+  const topEvents = [...eventCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  return { answer: topEvents.length ? `Across ${evidence.properties.length} homes, the most common timeline activity is ${topEvents.map(([name, count]) => `${name.replaceAll("_", " ")} (${count})`).join(", ")}. There are ${evidence.requests.length} request records available for a more specific comparison.` : "The Keewano timeline is connected, but it does not have enough events to reason about a pattern yet.", highlights: topEvents.map(([name, count]) => `${name.replaceAll("_", " ")}: ${count} event${count === 1 ? "" : "s"}`), source: "keewano" as const };
+}
+
+async function reasonWithOpenAI(question: string, evidence: ReturnType<RelayRepository["keewanoEvidence"]>): Promise<{ answer: string; highlights: string[]; source: "openai" } | null> {
+  const apiKey = process.env.OPENAI_API_KEY ?? "";
+  if (!apiKey || process.env.OPENAI_KEEWANO_ENABLED === "false") return null;
+  const homeStats = new Map<string, { requests: number; urgent: number; categories: Record<string, number>; events: Record<string, number> }>();
+  for (const property of evidence.properties) homeStats.set(property.name, { requests: 0, urgent: 0, categories: {}, events: {} });
+  for (const request of evidence.requests) {
+    const name = String(request.propertyName ?? "Unknown property");
+    const stat = homeStats.get(name) ?? { requests: 0, urgent: 0, categories: {}, events: {} };
+    stat.requests += 1;
+    if (["URGENT", "CRITICAL"].includes(String(request.severity ?? ""))) stat.urgent += 1;
+    const category = String(request.category ?? "Unknown"); stat.categories[category] = (stat.categories[category] ?? 0) + 1;
+    homeStats.set(name, stat);
+  }
+  for (const event of evidence.events) {
+    const name = String(event.propertyName ?? "Unknown property");
+    const stat = homeStats.get(name) ?? { requests: 0, urgent: 0, categories: {}, events: {} };
+    const eventName = String(event.eventName ?? "unknown"); stat.events[eventName] = (stat.events[eventName] ?? 0) + 1;
+    homeStats.set(name, stat);
+  }
+  const vendorStats = new Map<string, { plumbingRequests: number; resolved: number; resolutionHours: number[] }>();
+  for (const request of evidence.requests) {
+    if (!/plumb|water|leak|drain|pipe/i.test(`${String(request.category ?? "")} ${String(request.summary ?? "")}`) || !request.vendorName) continue;
+    const name = String(request.vendorName); const stat = vendorStats.get(name) ?? { plumbingRequests: 0, resolved: 0, resolutionHours: [] };
+    stat.plumbingRequests += 1;
+    if (typeof request.resolutionHours === "number") { stat.resolved += 1; stat.resolutionHours.push(request.resolutionHours); }
+    vendorStats.set(name, stat);
+  }
+  const modelEvidence = {
+    homes: [...homeStats.entries()].map(([name, stat]) => ({ name, ...stat })),
+    vendors: [...vendorStats.entries()].map(([name, stat]) => ({ name, ...stat })),
+    requests: evidence.requests.map((request) => ({ property: request.propertyName, category: request.category, severity: request.severity, status: request.status, resolutionHours: request.resolutionHours })),
+  };
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ model: process.env.OPENAI_MODEL ?? "gpt-6-luna", input: [
+        { role: "system", content: "You are Huis's Keewano analyst. Answer the landlord's question using only the aggregated event telemetry supplied. Compare homes, vendors, categories, urgency, and sequences when useful. Never invent facts; if there is not enough evidence, say exactly what is missing. Keep the answer under 120 words and include up to three short evidence highlights." },
+        { role: "user", content: JSON.stringify({ question, keewanoTelemetry: modelEvidence }) },
+      ], text: { format: { type: "json_schema", name: "huis_keewano_reasoning", strict: true, schema: { type: "object", additionalProperties: false, properties: { answer: { type: "string" }, highlights: { type: "array", items: { type: "string" } } }, required: ["answer", "highlights"] } } } }),
+      signal: AbortSignal.timeout(9000),
+    });
+    if (!response.ok) { console.warn(`[huis] Keewano GPT reasoning unavailable (${response.status}); using local reasoning.`); return null; }
+    const body = await response.json() as { output_text?: unknown; output?: unknown };
+    const parsed = JSON.parse(responseOutputText(body) || "{}");
+    if (typeof parsed.answer !== "string" || !Array.isArray(parsed.highlights) || parsed.highlights.some((item: unknown) => typeof item !== "string")) return null;
+    return { answer: parsed.answer.slice(0, 900), highlights: parsed.highlights.slice(0, 3).map((item: string) => item.slice(0, 180)), source: "openai" };
+  } catch (error) {
+    console.warn(`[huis] Keewano GPT reasoning failed; using local reasoning: ${error instanceof Error ? error.message : "unknown error"}`);
+    return null;
+  }
+}
+
+function keewanoEvidence(repo: RelayRepository, propertyId?: string): ReturnType<RelayRepository["keewanoEvidence"]> {
+  const db = repo.db;
+  const properties = (db.prepare("SELECT id, name FROM properties ORDER BY name").all() as Array<Record<string, unknown>>)
+    .filter((row) => !propertyId || String(row.id) === propertyId)
+    .map((row) => ({ id: String(row.id), name: String(row.name) }));
+  const eventRows = db.prepare(`SELECT e.event_name, e.aggregate_type, e.created_at,
+    COALESCE(p.id, property_from_event.id) AS property_id,
+    COALESCE(p.name, property_from_event.name) AS property_name,
+    r.category, r.severity, r.summary
+    FROM domain_events e
+    LEFT JOIN maintenance_requests r ON e.aggregate_type='MaintenanceRequest' AND e.aggregate_id=r.id
+    LEFT JOIN properties p ON p.id=r.property_id
+    LEFT JOIN properties property_from_event ON e.aggregate_type='Property' AND e.aggregate_id=property_from_event.id
+    WHERE (? IS NULL OR COALESCE(p.id, property_from_event.id)=?)
+    ORDER BY e.created_at DESC LIMIT 400`).all(propertyId ?? null, propertyId ?? null) as Array<Record<string, unknown>>;
+  const events = eventRows.map((row) => ({ eventName: String(row.event_name), aggregateType: String(row.aggregate_type), createdAt: String(row.created_at), propertyName: String(row.property_name ?? "Unknown property"), category: String(row.category ?? ""), severity: String(row.severity ?? ""), summary: String(row.summary ?? "") }));
+  const requestRows = db.prepare(`SELECT r.id, p.name AS property_name, r.category, r.severity, r.summary,
+    v.business_name AS vendor_name, r.created_at, r.updated_at, r.status
+    FROM maintenance_requests r JOIN properties p ON p.id=r.property_id
+    LEFT JOIN vendor_quotes q ON q.id=(SELECT q2.id FROM vendor_quotes q2 WHERE q2.maintenance_request_id=r.id ORDER BY q2.rowid DESC LIMIT 1)
+    LEFT JOIN vendors v ON v.id=q.vendor_id
+    WHERE (? IS NULL OR r.property_id=?) ORDER BY r.updated_at DESC LIMIT 200`).all(propertyId ?? null, propertyId ?? null) as Array<Record<string, unknown>>;
+  const requests = requestRows.map((row) => ({ id: String(row.id), propertyName: String(row.property_name), category: String(row.category), severity: String(row.severity), summary: String(row.summary), vendorName: row.vendor_name ? String(row.vendor_name) : null, status: String(row.status), resolutionHours: ["RESOLVED", "CANCELLED"].includes(String(row.status)) ? Math.max(0, (Date.parse(String(row.updated_at)) - Date.parse(String(row.created_at))) / 3_600_000) : null }));
+  return { properties, events, requests };
+}
+
 export function createApp(repo = new RelayRepository(databasePath())) {
   const app = Fastify({ logger: false });
   const keewanoTimeline = new KeewanoTimeline();
@@ -179,6 +295,13 @@ export function createApp(repo = new RelayRepository(databasePath())) {
 
   app.get("/health", async () => ({ ok: true, service: "huis-api", storage: mongoStatus === "connected" ? "mongodb-configured" : "local-demo", integrations: { keewano: keewanoTimeline.status, mongodb: mongoStatus } }));
   app.get("/api/properties", async () => ({ properties: repo.properties() }));
+  app.post<{ Body: { question?: string; propertyId?: string } }>("/api/keewano/ask", async (request, reply) => {
+    const question = String(request.body?.question ?? "").trim().slice(0, 500);
+    if (!question) return reply.code(400).send({ error: "QUESTION_REQUIRED", message: "Ask a question about the Keewano timeline." });
+    const evidence = keewanoEvidence(repo, request.body?.propertyId);
+    const answer = await reasonWithOpenAI(question, evidence) ?? answerKeewanoQuestion(question, evidence);
+    return { question, ...answer, evidence: { homes: evidence.properties.length, events: evidence.events.length, requests: evidence.requests.length } };
+  });
   app.post<{ Body: { name?: string; address?: string; timezone?: string; unitLabel?: string; tenantName?: string; tenantPhone?: string } }>("/api/properties", async (request, reply) => {
     const body = request.body ?? {};
     if (!body.name?.trim() || !body.address?.trim()) return reply.code(400).send({ error: "INVALID_PROPERTY", message: "name and address are required" });

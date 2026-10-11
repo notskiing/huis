@@ -64,4 +64,12 @@ describe("Huis API workflow",()=>{
     expect(ticket.approvals[0].scope.vendorIds).toEqual(["vendor_electrician"]);
     await app.close(); repo.close();
   });
+  it("answers Ask Keewano questions from the timeline evidence",async()=>{
+    const repo=new RelayRepository(); repo.resetDemo(); const {app}=createApp(repo);
+    const response=await app.inject({method:"POST",url:"/api/keewano/ask",payload:{question:"Which homes have repeated heating problems?"}});
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({source:"keewano",evidence:{homes:2}});
+    expect(response.json().answer).toContain("No home");
+    await app.close(); repo.close();
+  });
 });

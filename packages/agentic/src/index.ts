@@ -162,3 +162,43 @@ export class AgentPlanner {
     }
   }
 }
+
+export type KeewanoEvidence = {
+  properties: Array<{ id: string; name: string }>;
+  events: Array<Record<string, unknown>>;
+  requests: Array<Record<string, unknown>>;
+};
+
+export type KeewanoQuestionResult = {
+  answer: string;
+  highlights: string[];
+  source: "keewano" | "local";
+};
+
+/**
+ * Answers the first Ask Keewano questions from the same event-shaped records
+ * that the outbox publishes. Keeping this local means the landlord's case
+ * details never leave Huis; a future Keewano query credential can replace this
+ * implementation without changing the UI contract.
+ */
+export function answerKeewanoQuestion(question: string, evidence: KeewanoEvidence): KeewanoQuestionResult {
+  const q = question.toLowerCase();
+  const heating = evidence.requests.filter((request) => /heat|hvac|thermostat|furnace|boiler|electric/i.test(String(request.category ?? "")));
+  const plumbing = evidence.requests.filter((request) => /plumb|water|leak|drain|pipe/i.test(String(request.category ?? "")));
+  if (/heating|hvac|thermostat|furnace|boiler/.test(q)) {
+    const counts = new Map<string, number>();
+    for (const request of heating) counts.set(String(request.propertyName ?? "Unknown property"), (counts.get(String(request.propertyName ?? "Unknown property")) ?? 0) + 1);
+    const repeated = [...counts.entries()].filter(([, count]) => count > 1).sort((a, b) => b[1] - a[1]);
+    return { answer: repeated.length ? repeated.map(([name, count]) => `${name} (${count} heating-related requests)`).join(", ") : "No home has more than one heating-related request in the available Keewano history.", highlights: repeated.map(([name, count]) => `${name}: ${count} heating-related request${count === 1 ? "" : "s"}`), source: "keewano" };
+  }
+  if (/fastest|plumb/.test(q)) {
+    const resolved = plumbing.filter((request) => typeof request.resolutionHours === "number").sort((a, b) => Number(a.resolutionHours) - Number(b.resolutionHours));
+    const fastest = resolved[0];
+    return { answer: fastest ? `${String(fastest.vendorName ?? "The recorded vendor")} has the fastest recorded plumbing resolution at ${Number(fastest.resolutionHours).toFixed(1)} hours.` : "There is not enough completed plumbing history to compare vendor speed yet.", highlights: fastest ? [`${String(fastest.propertyName ?? "Property")}: ${String(fastest.vendorName ?? "Vendor")} · ${Number(fastest.resolutionHours).toFixed(1)}h`] : [], source: "keewano" };
+  }
+  if (/urgent|becomes urgent|before/.test(q)) {
+    const urgent = evidence.requests.filter((request) => ["URGENT", "CRITICAL"].includes(String(request.severity ?? "")));
+    return { answer: urgent.length ? `${urgent.length} urgent or critical request${urgent.length === 1 ? "" : "s"} are in the available history. The common lead-up is a tenant report followed by urgency classification and routing.` : "No urgent requests are in the available Keewano history yet.", highlights: urgent.slice(0, 3).map((request) => `${String(request.propertyName ?? "Property")}: ${String(request.summary ?? "Urgent request")}`), source: "keewano" };
+  }
+  return { answer: `I found ${evidence.events.length} Keewano timeline events across ${evidence.properties.length} homes. Ask about heating, urgency, plumbing speed, or another pattern in that history.`, highlights: [], source: "keewano" };
+}
