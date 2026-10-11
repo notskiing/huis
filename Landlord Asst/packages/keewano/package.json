@@ -1,0 +1,8 @@
+{
+  "name": "@relaypm/keewano",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": { "@relaypm/core": "workspace:*" },
+  "scripts": { "typecheck": "tsc --noEmit" }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "@relaypm/worker",
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": { "@relaypm/core": "workspace:*", "@relaypm/db": "workspace:*", "@relaypm/keewano": "workspace:*" },
+  "scripts": { "typecheck": "tsc --noEmit", "build": "tsc -p tsconfig.json" }
+}
